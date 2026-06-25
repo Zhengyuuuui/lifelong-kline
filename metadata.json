@@ -1,0 +1,11 @@
+{
+  "name": "Remix: 人生说明书/ 6.3",
+  "description": "A metaphysical visualization of life\u0027s trajectory using stock market aesthetics and I Ching concepts. Features AI-powered life segment analysis.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

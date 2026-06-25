@@ -1,0 +1,7 @@
+{
+  "name": "颜值资产·面相估值所",
+  "description": "别整容了，先看看这张脸值多少钱？基于AI面相学的赛博资产评估报告。",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

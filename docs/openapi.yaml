@@ -1,0 +1,569 @@
+openapi: 3.1.0
+info:
+  title: Life Kline Commercial API
+  version: 1.0.0
+  description: 商用 iOS AI 应用后端 API 契约。
+servers:
+  - url: http://127.0.0.1:3000
+    description: Local development
+security:
+  - bearerAuth: []
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: API is healthy.
+  /api/postgres/health:
+    get:
+      summary: Production Postgres health check
+      security: []
+      responses:
+        "200":
+          description: Postgres connection and required tables are healthy.
+        "500":
+          description: Postgres is unavailable.
+  /api/session:
+    get:
+      summary: Restore current session
+      security:
+        - bearerAuth: []
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Session bundle or unauthenticated state.
+  /api/auth/passwordless:
+    post:
+      summary: Create or restore a passwordless session
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthPayload"
+      responses:
+        "200":
+          description: Login success.
+        "422":
+          description: Validation failed.
+  /api/auth/apple:
+    post:
+      summary: Production Sign in with Apple
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppleLoginPayload"
+      responses:
+        "200":
+          description: JWT auth bundle.
+        "401":
+          description: Invalid Apple identity token.
+        "422":
+          description: Validation failed.
+  /api/auth/wechat:
+    post:
+      summary: Production WeChat OAuth login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WeChatLoginPayload"
+      responses:
+        "200":
+          description: JWT auth bundle.
+        "401":
+          description: WeChat authorization failed.
+  /api/auth/refresh:
+    post:
+      summary: Rotate refresh token and issue a new access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken:
+                  type: string
+      responses:
+        "200":
+          description: New JWT auth bundle.
+        "401":
+          description: Refresh token expired or revoked.
+  /api/auth/logout:
+    post:
+      summary: Revoke current session
+      responses:
+        "200":
+          description: Logged out.
+        "401":
+          description: Authentication required.
+  /api/me:
+    get:
+      summary: Get current user bundle
+      responses:
+        "200":
+          description: Current user bundle.
+        "401":
+          description: Authentication required.
+  /api/user/me:
+    get:
+      summary: Get current production Postgres user bundle
+      responses:
+        "200":
+          description: Current production user bundle.
+        "401":
+          description: Authentication required.
+  /api/profile:
+    post:
+      summary: Save user birth profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile:
+                  $ref: "#/components/schemas/UserProfile"
+                bazi:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Profile saved.
+        "401":
+          description: Authentication required.
+        "422":
+          description: Validation failed.
+  /api/user/profile:
+    post:
+      summary: Save production Postgres user profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [profile]
+              properties:
+                profile:
+                  $ref: "#/components/schemas/UserProfile"
+                derivedAiFoundation:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Profile saved.
+        "401":
+          description: Authentication required.
+        "422":
+          description: Validation failed.
+  /api/user/settings:
+    post:
+      summary: Save production user settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                settings:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Settings saved.
+        "401":
+          description: Authentication required.
+  /api/user/bindings:
+    post:
+      summary: Save production user account bindings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bindings:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Bindings saved.
+        "401":
+          description: Authentication required.
+  /api/user/share-count:
+    post:
+      summary: Save production share count
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                shareCount:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000000
+      responses:
+        "200":
+          description: Share count saved.
+        "401":
+          description: Authentication required.
+  /api/user/account:
+    delete:
+      summary: Delete production account and revoke refresh tokens
+      responses:
+        "200":
+          description: Account deleted.
+        "401":
+          description: Authentication required.
+  /api/ai/generate:
+    post:
+      summary: Secure production AI generation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AiGeneratePayload"
+      responses:
+        "200":
+          description: AI generation result.
+        "401":
+          description: Authentication required.
+        "422":
+          description: Missing profile or validation failed.
+        "429":
+          description: AI quota reached.
+        "503":
+          description: AI provider not configured or unavailable.
+  /api/membership/checkout:
+    post:
+      summary: Create a membership order
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutPayload"
+      responses:
+        "200":
+          description: Order created or paid in mock mode.
+        "401":
+          description: Authentication required.
+        "422":
+          description: Validation failed.
+  /api/membership/confirm:
+    post:
+      summary: Confirm a live payment receipt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId]
+              properties:
+                orderId:
+                  type: string
+                  format: uuid
+                providerOrderId:
+                  type: string
+                  maxLength: 160
+                receipt:
+                  type: string
+                  maxLength: 4096
+      responses:
+        "200":
+          description: Payment confirmed.
+        "401":
+          description: Authentication required.
+        "422":
+          description: Validation failed.
+  /api/payment/verify-receipt:
+    post:
+      summary: Verify Apple IAP signed transaction or receipt and update membership
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AppleReceiptPayload"
+      responses:
+        "200":
+          description: Receipt verified and membership updated.
+        "401":
+          description: Authentication required.
+        "402":
+          description: Apple receipt verification failed.
+        "422":
+          description: Validation failed.
+  /api/webhooks/apple:
+    post:
+      summary: App Store Server Notifications V2 webhook
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signedPayload]
+              properties:
+                signedPayload:
+                  type: string
+      responses:
+        "200":
+          description: Notification verified and processed.
+        "422":
+          description: Invalid signedPayload.
+        "503":
+          description: Apple root certificates are not configured.
+  /api/settings:
+    post:
+      summary: Save user settings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [settings]
+              properties:
+                settings:
+                  $ref: "#/components/schemas/UserSettings"
+      responses:
+        "200":
+          description: Settings saved.
+  /api/bindings:
+    post:
+      summary: Save account bindings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bindings]
+              properties:
+                bindings:
+                  $ref: "#/components/schemas/AccountBindings"
+      responses:
+        "200":
+          description: Bindings saved.
+  /api/share-count:
+    post:
+      summary: Save share unlock count
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [shareCount]
+              properties:
+                shareCount:
+                  type: integer
+                  minimum: 0
+                  maximum: 1000
+      responses:
+        "200":
+          description: Share count saved.
+  /api/account:
+    delete:
+      summary: Soft delete current account
+      responses:
+        "200":
+          description: Account deleted.
+  /api/gemini/generateContent:
+    post:
+      summary: Gemini non-streaming proxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Gemini response.
+        "429":
+          description: AI quota reached.
+        "503":
+          description: AI provider not configured or unavailable.
+  /api/gemini/generateContentStream:
+    post:
+      summary: Gemini SSE streaming proxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: SSE stream.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: life_session
+  schemas:
+    AuthPayload:
+      type: object
+      required: [provider, clientInstallationId]
+      properties:
+        provider:
+          type: string
+          enum: [wechat, apple, google, phone, email, guest]
+        clientInstallationId:
+          type: string
+          maxLength: 80
+        providerSubject:
+          type: string
+          maxLength: 160
+        displayName:
+          type: string
+          maxLength: 80
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          maxLength: 32
+    AppleLoginPayload:
+      type: object
+      required: [identityToken]
+      properties:
+        identityToken:
+          type: string
+        nonce:
+          type: string
+          maxLength: 256
+        nonceSha256:
+          type: string
+          maxLength: 256
+        fullName:
+          type: string
+          maxLength: 120
+        email:
+          type: string
+          format: email
+    WeChatLoginPayload:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          maxLength: 512
+    UserProfile:
+      type: object
+      required: [name, gender, birthDate, birthTime, birthPlace]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+        gender:
+          type: string
+          enum: [male, female]
+        birthDate:
+          type: string
+          pattern: "^\\d{4}-\\d{2}-\\d{2}$"
+        birthTime:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d$"
+        birthPlace:
+          type: string
+          maxLength: 160
+    AiGeneratePayload:
+      type: object
+      required: [feature]
+      properties:
+        feature:
+          type: string
+          enum: [bazi_report, life_book, life_kline, smooth_sailing, valuation, revenue_forecast, chat]
+        input:
+          type: object
+          additionalProperties: true
+        locale:
+          type: string
+          enum: [zh-CN, zh-TW, en-US]
+          default: zh-CN
+        responseFormat:
+          type: string
+          enum: [json, text]
+          default: json
+    AppleReceiptPayload:
+      type: object
+      properties:
+        signedTransactionInfo:
+          type: string
+          description: StoreKit 2 signed transaction JWS.
+        receiptData:
+          type: string
+        productId:
+          type: string
+          maxLength: 180
+        transactionId:
+          type: string
+          maxLength: 180
+        environment:
+          type: string
+          enum: [auto, sandbox, production]
+          default: auto
+        mockSuccess:
+          type: boolean
+    CheckoutPayload:
+      type: object
+      required: [plan, provider, amountCents]
+      properties:
+        plan:
+          type: string
+          enum: [monthly, lifetime]
+        provider:
+          type: string
+          enum: [wechat, alipay, apple]
+        amountCents:
+          type: integer
+          minimum: 100
+          maximum: 999900
+    UserSettings:
+      type: object
+      properties:
+        notifications:
+          type: boolean
+        language:
+          type: string
+          maxLength: 40
+    AccountBindings:
+      type: object
+      properties:
+        phone:
+          type:
+            - string
+            - "null"
+          maxLength: 32
+        wechat:
+          type: boolean

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wu Xing Energy Monitor</title>
+    <link rel="stylesheet" href="/index.css">
+    <style>
+      body {
+        margin: 0;
+        font-family: 'Inter', sans-serif;
+        background-color: #050505;
+        color: #e5e5e5;
+        overflow-y: auto; /* Enable scrolling */
+        overflow-x: hidden;
+      }
+      
+      /* --- 3D Book Engine Styles --- */
+      .perspective-2000 { perspective: 2000px; }
+      .perspective-1000 { perspective: 1000px; }
+      
+      /* Critical for 3D page flips */
+      .preserve-3d { 
+        transform-style: preserve-3d; 
+        -webkit-transform-style: preserve-3d;
+      }
+      
+      .backface-hidden { 
+        backface-visibility: hidden; 
+        -webkit-backface-visibility: hidden; 
+      }
+      
+      .rotate-y-180 { transform: rotateY(180deg); }
+      .rotate-y-0 { transform: rotateY(0deg); }
+      
+      /* Scrollbar Hiding */
+      .scrollbar-hide::-webkit-scrollbar { display: none; }
+      .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+      /* Animation Utilities */
+      @keyframes shimmer {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+      }
+      .animate-shimmer {
+        animation: shimmer 2s infinite;
+      }
+      .animate-spin-slow {
+        animation: spin 3s linear infinite;
+      }
+      @keyframes spin {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      /* Text Utilities */
+      .font-serif-display { font-family: 'Playfair Display', serif; }
+      .font-serif-elegant { font-family: 'Cinzel', serif; }
+      .font-handwriting { font-family: 'Caveat', cursive; }
+      .font-rounded { font-family: 'Nunito', sans-serif; }
+    </style>
+	</head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
