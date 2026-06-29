@@ -2,7 +2,7 @@ import type { AiProviderName } from "../aiProvider";
 
 export interface BackendConfig {
   nodeEnv: string;
-  appEnv: "sandbox" | "staging" | "production";
+  appEnv: "development" | "sandbox" | "staging" | "production";
   databaseUrl: string;
   databaseSsl: boolean;
   pgPoolMax: number;
@@ -106,8 +106,10 @@ const aiKeyEnv = (provider: AiProviderName) => {
   return process.env.GEMINI_API_KEY || process.env.AI_API_KEY || process.env.API_KEY || "";
 };
 
-const requireStrongSecret = (name: string, value: string, nodeEnv: string) => {
-  if (nodeEnv === "production" && value.length < 32) {
+const isProductionAppEnv = (appEnv: BackendConfig["appEnv"]) => appEnv === "production";
+
+const requireStrongSecret = (name: string, value: string, appEnv: BackendConfig["appEnv"]) => {
+  if (isProductionAppEnv(appEnv) && value.length < 32) {
     throw new Error(`${name} must be at least 32 characters in production.`);
   }
   return value;
@@ -119,13 +121,16 @@ const appEnvValue = (value: string | undefined, nodeEnv: string): BackendConfig[
     if (nodeEnv === "production") {
       throw new Error("APP_ENV must be explicitly set to staging or production when NODE_ENV=production.");
     }
-    return "sandbox";
+    return "development";
   }
-  if (!["sandbox", "staging", "production"].includes(normalized)) {
-    throw new Error("APP_ENV must be sandbox, staging, or production.");
+  if (!["development", "sandbox", "staging", "production"].includes(normalized)) {
+    throw new Error("APP_ENV must be development, staging, or production.");
   }
-  if (nodeEnv === "production" && normalized === "sandbox") {
-    throw new Error("APP_ENV=sandbox is not allowed when NODE_ENV=production.");
+  if (nodeEnv === "production" && (normalized === "development" || normalized === "sandbox")) {
+    throw new Error("APP_ENV=development/sandbox is not allowed when NODE_ENV=production. Use APP_ENV=staging for production-build dry runs.");
+  }
+  if ((normalized === "staging" || normalized === "production") && nodeEnv !== "production") {
+    throw new Error("APP_ENV=staging/production requires NODE_ENV=production.");
   }
   return normalized as BackendConfig["appEnv"];
 };
@@ -137,12 +142,12 @@ const paymentProviderEnv = (value: string | undefined): BackendConfig["paymentsP
 
 const paymentModeEnv = (
   value: string | undefined,
-  nodeEnv: string,
+  appEnv: BackendConfig["appEnv"],
   paymentsProvider: BackendConfig["paymentsProvider"]
 ): BackendConfig["paymentsMode"] => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
-    if (nodeEnv === "production" && paymentsProvider === "xunhupay") {
+    if (isProductionAppEnv(appEnv) && paymentsProvider === "xunhupay") {
       throw new Error("PAYMENTS_MODE=live is required for Xunhupay in production.");
     }
     return "mock";
@@ -150,7 +155,7 @@ const paymentModeEnv = (
   if (normalized !== "mock" && normalized !== "live") {
     throw new Error("PAYMENTS_MODE must be either mock or live.");
   }
-  if (nodeEnv === "production" && paymentsProvider === "xunhupay" && normalized !== "live") {
+  if (isProductionAppEnv(appEnv) && paymentsProvider === "xunhupay" && normalized !== "live") {
     throw new Error("PAYMENTS_MODE=mock is not allowed for Xunhupay in production.");
   }
   return normalized;
@@ -184,31 +189,35 @@ const boundedIntEnv = (name: string, value: string | undefined, fallback: number
   return parsed;
 };
 
-const smsModeEnv = (value: string | undefined, nodeEnv: string): BackendConfig["smsMode"] => {
+const smsModeEnv = (value: string | undefined, appEnv: BackendConfig["appEnv"]): BackendConfig["smsMode"] => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
-    if (nodeEnv === "production") {
-      throw new Error("SMS_MODE=tencent is required when NODE_ENV=production.");
+    if (isProductionAppEnv(appEnv)) {
+      throw new Error("SMS_MODE=tencent is required when APP_ENV=production.");
     }
     return "disabled";
   }
   if (!["disabled", "mock", "tencent"].includes(normalized)) {
     throw new Error("SMS_MODE must be disabled, mock, or tencent.");
   }
-  if (nodeEnv === "production" && normalized !== "tencent") {
-    throw new Error("SMS_MODE=mock/disabled is not allowed when NODE_ENV=production.");
+  if (isProductionAppEnv(appEnv) && normalized !== "tencent") {
+    throw new Error("SMS_MODE=mock/disabled is not allowed when APP_ENV=production.");
   }
   return normalized as BackendConfig["smsMode"];
 };
 
-const requireSmsHmacSecret = (value: string, smsMode: BackendConfig["smsMode"], nodeEnv: string) => {
+const requireSmsHmacSecret = (
+  value: string,
+  smsMode: BackendConfig["smsMode"],
+  appEnv: BackendConfig["appEnv"]
+) => {
   if (smsMode === "disabled") return value;
   if (!value) throw new Error("SMS_CODE_HMAC_SECRET is required when SMS_MODE is enabled.");
   if (value.length < 32) {
     throw new Error("SMS_CODE_HMAC_SECRET must be at least 32 characters.");
   }
-  if (nodeEnv === "production") {
-    requireStrongSecret("SMS_CODE_HMAC_SECRET", value, nodeEnv);
+  if (isProductionAppEnv(appEnv)) {
+    requireStrongSecret("SMS_CODE_HMAC_SECRET", value, appEnv);
   }
   return value;
 };
@@ -236,15 +245,15 @@ export const getBackendConfig = (): BackendConfig => {
   const appEnv = appEnvValue(process.env.APP_ENV, nodeEnv);
   const aiProvider = aiProviderEnv(process.env.AI_PROVIDER);
   const paymentsProvider = paymentProviderEnv(process.env.PAYMENTS_PROVIDER);
-  const paymentsMode = paymentModeEnv(process.env.PAYMENTS_MODE, nodeEnv, paymentsProvider);
-  const smsMode = smsModeEnv(process.env.SMS_MODE, nodeEnv);
+  const paymentsMode = paymentModeEnv(process.env.PAYMENTS_MODE, appEnv, paymentsProvider);
+  const smsMode = smsModeEnv(process.env.SMS_MODE, appEnv);
   const appleIapEnv = process.env.APPLE_IAP_ENV === "production" ? "production" : "sandbox";
   const jwtAccessSecret = process.env.JWT_ACCESS_SECRET || "dev-only-access-secret-change-before-release";
   const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || "dev-only-refresh-secret-change-before-release";
   const smsCodeHmacSecret = requireSmsHmacSecret(
     process.env.SMS_CODE_HMAC_SECRET || "",
     smsMode,
-    nodeEnv
+    appEnv
   );
   const smsMockCode = requireSmsMockCode(process.env.SMS_MOCK_CODE || "", smsMode);
   const publicSiteUrl = process.env.PUBLIC_SITE_URL || "";
@@ -281,8 +290,8 @@ export const getBackendConfig = (): BackendConfig => {
     pgPoolMax: intEnv(process.env.PG_POOL_MAX, 10),
     pgStatementTimeoutMs: intEnv(process.env.PG_STATEMENT_TIMEOUT_MS, 15000),
     pgIdleTimeoutMs: intEnv(process.env.PG_IDLE_TIMEOUT_MS, 30000),
-    jwtAccessSecret: requireStrongSecret("JWT_ACCESS_SECRET", jwtAccessSecret, nodeEnv),
-    jwtRefreshSecret: requireStrongSecret("JWT_REFRESH_SECRET", jwtRefreshSecret, nodeEnv),
+    jwtAccessSecret: requireStrongSecret("JWT_ACCESS_SECRET", jwtAccessSecret, appEnv),
+    jwtRefreshSecret: requireStrongSecret("JWT_REFRESH_SECRET", jwtRefreshSecret, appEnv),
     jwtIssuer: process.env.JWT_ISSUER || "life-kline-api",
     jwtAudience: process.env.JWT_AUDIENCE || "life-kline-ios",
     jwtAccessTtlSeconds: intEnv(process.env.JWT_ACCESS_TTL_SECONDS, 900),
