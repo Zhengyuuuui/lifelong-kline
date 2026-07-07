@@ -16,13 +16,14 @@ import { ModuleHelperTag } from './ModuleHelperTag';
 interface UserCenterProps {
   isOpen: boolean;
   onClose: () => void;
-  userProfile: UserInputProfile;
-  user: BackendUser;
-  identities: AuthIdentity[];
-  onLogout: () => void;
-  onPasswordChanged: () => void;
+  userProfile?: UserInputProfile;
+  user?: BackendUser;
+  identities?: AuthIdentity[];
+  onLogout?: () => void;
+  onPasswordChanged?: () => void;
   isPremium: boolean;
   onRequirePayment: () => void;
+  membershipOnly?: boolean;
   insight?: SegmentInsight | null;
   loading?: boolean;
   onAnalyze?: () => void;
@@ -32,7 +33,7 @@ interface UserCenterProps {
 type TabKey = 'profile' | 'membership' | 'security' | 'settings';
 
 export const UserCenter: React.FC<UserCenterProps> = ({ 
-  isOpen, onClose, userProfile, user, identities, onLogout, onPasswordChanged, isPremium, onRequirePayment, insight, loading, onAnalyze, onShowInsight 
+  isOpen, onClose, userProfile, user, identities = [], onLogout, onPasswordChanged, isPremium, onRequirePayment, membershipOnly = false, insight, loading, onAnalyze, onShowInsight
 }) => {
   const [activeTab, setActiveTab] = useState<TabKey>('membership');
   const [copied, setCopied] = useState(false);
@@ -52,6 +53,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+        if (membershipOnly) setActiveTab('membership');
         const savedCount = storage.getShareCount();
         setShareCount(savedCount);
         if (savedCount >= 3) setIsShareUnlocked(true);
@@ -60,11 +62,12 @@ export const UserCenter: React.FC<UserCenterProps> = ({
         setSettings(savedSettings);
 
     }
-  }, [isOpen]);
+  }, [isOpen, membershipOnly]);
 
   if (!isOpen) return null;
 
   const handleCopyId = () => {
+    if (!user?.id) return;
     navigator.clipboard.writeText(user.id);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -94,7 +97,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
       if (confirm("警告：确定要注销账号吗？此操作不可逆，所有数据将被清空。")) {
           backendClient.deleteAccount()
             .catch((error) => console.warn("Delete account sync failed", error))
-            .finally(onLogout);
+            .finally(() => onLogout?.());
       }
   };
 
@@ -127,7 +130,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
           setCurrentPassword('');
           setNewPassword('');
           setConfirmPassword('');
-          onPasswordChanged();
+          onPasswordChanged?.();
       } catch (error) {
           const status = (error as { status?: number }).status;
           setPasswordError(status === 401
@@ -142,7 +145,9 @@ export const UserCenter: React.FC<UserCenterProps> = ({
       }
   };
 
-  const menuItems: { id: TabKey; label: string; icon: React.ReactNode }[] = [
+  const menuItems: { id: TabKey; label: string; icon: React.ReactNode }[] = membershipOnly ? [
+    { id: 'membership', label: i18n.t('user.member_level') || '会员等级', icon: <Crown size={16} strokeWidth={1.5} /> },
+  ] : [
     { id: 'membership', label: i18n.t('user.member_level') || '会员等级', icon: <Crown size={16} strokeWidth={1.5} /> },
     { id: 'profile', label: i18n.t('user.center') || '个人中心', icon: <User size={16} strokeWidth={1.5} /> },
     { id: 'security', label: i18n.t('user.account') || '安全', icon: <Shield size={16} strokeWidth={1.5} /> },
@@ -200,7 +205,9 @@ export const UserCenter: React.FC<UserCenterProps> = ({
       );
   };
 
-  const ProfileView = () => (
+  const ProfileView = () => {
+    if (!userProfile || !user) return null;
+    return (
     <div className="space-y-8 animate-fade-in">
        {/* High-End Minimal Profile Card */}
        <div className="relative rounded-3xl p-8 bg-gradient-to-b from-white/[0.04] to-transparent border border-white/5 overflow-hidden group">
@@ -266,6 +273,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
        </div>
     </div>
   );
+  };
 
   const MembershipView = () => (
     <div className="space-y-4 animate-fade-in text-white">
@@ -513,7 +521,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
             ))}
         </div>
 
-        <button onClick={onLogout} className="w-full p-4 rounded-3xl bg-white/[0.02] border border-white/5 hover:bg-white hover:text-black text-white/60 text-sm font-medium transition-all flex items-center justify-center gap-3">
+        <button onClick={() => onLogout?.()} className="w-full p-4 rounded-3xl bg-white/[0.02] border border-white/5 hover:bg-white hover:text-black text-white/60 text-sm font-medium transition-all flex items-center justify-center gap-3">
            <LogOut size={16} strokeWidth={1.5} />
            {i18n.t('user.logout') || '退出登录'}
         </button>

@@ -7,6 +7,7 @@ import type { RequestMeta } from "./auth.service";
 import type { SmsSendPayload } from "./validation";
 import { normalizeE164Phone } from "./validation";
 import { TencentSmsService, type SmsProviderResult } from "./tencentSms.service";
+import { AliyunSmsService } from "./aliyunSms.service";
 
 const normalizeIp = (value?: string | null) => {
   if (!value) return null;
@@ -79,7 +80,8 @@ interface RateLimitedOutcome {
 }
 
 export class SmsService {
-  private readonly provider = new TencentSmsService();
+  private readonly tencentProvider = new TencentSmsService();
+  private readonly aliyunProvider = new AliyunSmsService();
 
   async sendRegisterCode(payload: SmsSendPayload, meta: RequestMeta) {
     const config = getBackendConfig();
@@ -215,7 +217,7 @@ export class SmsService {
       purpose: payload.purpose,
       phoneHash,
       deviceHash,
-      provider: config.smsMode,
+      provider: config.smsMode === "mock" ? "mock" : config.smsProvider,
     }, meta);
 
     return {
@@ -259,8 +261,11 @@ export class SmsService {
     if (config.smsMode === "mock") {
       return { requestId: `mock:${input.challengeId}` };
     }
-    if (config.smsMode === "tencent") {
-      return this.provider.sendVerificationCode(input);
+    if (config.smsMode === "live" && config.smsProvider === "tencent") {
+      return this.tencentProvider.sendVerificationCode(input);
+    }
+    if (config.smsMode === "live" && config.smsProvider === "aliyun_dypns_sms") {
+      return this.aliyunProvider.sendVerificationCode(input);
     }
     throw new HttpError(503, "SMS registration is not configured");
   }

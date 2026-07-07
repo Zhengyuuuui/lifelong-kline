@@ -52,7 +52,8 @@ export interface BackendConfig {
   xunhupayReturnUrl: string;
   xunhupayCallbackUrl: string;
   publicSiteUrl: string;
-  smsMode: "disabled" | "mock" | "tencent";
+  smsMode: "disabled" | "mock" | "live";
+  smsProvider: "tencent" | "aliyun_dypns_sms";
   smsCodeHmacSecret: string;
   smsCodeTtlSeconds: number;
   smsCodeMaxAttempts: number;
@@ -67,6 +68,15 @@ export interface BackendConfig {
   tencentCloudSmsSignName: string;
   tencentCloudSmsTemplateId: string;
   tencentCloudSmsRegion: string;
+  alibabaCloudAccessKeyId: string;
+  alibabaCloudAccessKeySecret: string;
+  aliyunDypnsRegion: string;
+  aliyunDypnsEndpoint: string;
+  aliyunSmsSignName: string;
+  aliyunSmsTemplateCode: string;
+  aliyunSmsCountryCode: string;
+  aliyunSmsCodeParamName: string;
+  aliyunSmsMinParamName: string;
   pgRateLimitEnabled: boolean;
 }
 
@@ -193,17 +203,31 @@ const smsModeEnv = (value: string | undefined, appEnv: BackendConfig["appEnv"]):
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
     if (isProductionAppEnv(appEnv)) {
-      throw new Error("SMS_MODE=tencent is required when APP_ENV=production.");
+      throw new Error("SMS_MODE=live is required when APP_ENV=production.");
     }
     return "disabled";
   }
-  if (!["disabled", "mock", "tencent"].includes(normalized)) {
-    throw new Error("SMS_MODE must be disabled, mock, or tencent.");
+  if (normalized === "tencent") {
+    return "live";
   }
-  if (isProductionAppEnv(appEnv) && normalized !== "tencent") {
+  if (!["disabled", "mock", "live"].includes(normalized)) {
+    throw new Error("SMS_MODE must be disabled, mock, or live.");
+  }
+  if (isProductionAppEnv(appEnv) && normalized !== "live") {
     throw new Error("SMS_MODE=mock/disabled is not allowed when APP_ENV=production.");
   }
   return normalized as BackendConfig["smsMode"];
+};
+
+const smsProviderEnv = (value: string | undefined, smsMode: BackendConfig["smsMode"]): BackendConfig["smsProvider"] => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "tencent";
+  if (normalized === "tencent" || normalized === "tencent_sms") return "tencent";
+  if (normalized === "aliyun_dypns_sms" || normalized === "aliyun") return "aliyun_dypns_sms";
+  if (smsMode === "live") {
+    throw new Error("SMS_PROVIDER must be tencent or aliyun_dypns_sms when SMS_MODE=live.");
+  }
+  return "tencent";
 };
 
 const requireSmsHmacSecret = (
@@ -233,10 +257,24 @@ const requireSmsMockCode = (value: string, smsMode: BackendConfig["smsMode"]) =>
 const requireTencentSmsValue = (
   name: string,
   value: string,
-  smsMode: BackendConfig["smsMode"]
+  smsMode: BackendConfig["smsMode"],
+  smsProvider: BackendConfig["smsProvider"]
 ) => {
-  if (smsMode !== "tencent") return value;
-  if (!value) throw new Error(`${name} is required when SMS_MODE=tencent.`);
+  if (smsMode !== "live" || smsProvider !== "tencent") return value;
+  if (!value) throw new Error(`${name} is required when SMS_MODE=live and SMS_PROVIDER=tencent.`);
+  return value;
+};
+
+const requireAliyunSmsValue = (
+  name: string,
+  value: string,
+  smsMode: BackendConfig["smsMode"],
+  smsProvider: BackendConfig["smsProvider"]
+) => {
+  if (smsMode !== "live" || smsProvider !== "aliyun_dypns_sms") return value;
+  if (!value) {
+    throw new Error(`${name} is required when SMS_MODE=live and SMS_PROVIDER=aliyun_dypns_sms.`);
+  }
   return value;
 };
 
@@ -247,6 +285,7 @@ export const getBackendConfig = (): BackendConfig => {
   const paymentsProvider = paymentProviderEnv(process.env.PAYMENTS_PROVIDER);
   const paymentsMode = paymentModeEnv(process.env.PAYMENTS_MODE, appEnv, paymentsProvider);
   const smsMode = smsModeEnv(process.env.SMS_MODE, appEnv);
+  const smsProvider = smsProviderEnv(process.env.SMS_PROVIDER, smsMode);
   const appleIapEnv = process.env.APPLE_IAP_ENV === "production" ? "production" : "sandbox";
   const jwtAccessSecret = process.env.JWT_ACCESS_SECRET || "dev-only-access-secret-change-before-release";
   const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || "dev-only-refresh-secret-change-before-release";
@@ -346,6 +385,7 @@ export const getBackendConfig = (): BackendConfig => {
     xunhupayCallbackUrl,
     publicSiteUrl,
     smsMode,
+    smsProvider,
     smsCodeHmacSecret,
     smsCodeTtlSeconds: boundedIntEnv("SMS_CODE_TTL_SECONDS", process.env.SMS_CODE_TTL_SECONDS, 300, 60, 1800),
     smsCodeMaxAttempts: boundedIntEnv("SMS_CODE_MAX_ATTEMPTS", process.env.SMS_CODE_MAX_ATTEMPTS, 5, 1, 20),
@@ -357,29 +397,63 @@ export const getBackendConfig = (): BackendConfig => {
     tencentCloudSecretId: requireTencentSmsValue(
       "TENCENTCLOUD_SECRET_ID",
       process.env.TENCENTCLOUD_SECRET_ID || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSecretKey: requireTencentSmsValue(
       "TENCENTCLOUD_SECRET_KEY",
       process.env.TENCENTCLOUD_SECRET_KEY || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsSdkAppId: requireTencentSmsValue(
       "TENCENTCLOUD_SMS_SDK_APP_ID",
       process.env.TENCENTCLOUD_SMS_SDK_APP_ID || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsSignName: requireTencentSmsValue(
       "TENCENTCLOUD_SMS_SIGN_NAME",
       process.env.TENCENTCLOUD_SMS_SIGN_NAME || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsTemplateId: requireTencentSmsValue(
       "TENCENTCLOUD_SMS_TEMPLATE_ID",
       process.env.TENCENTCLOUD_SMS_TEMPLATE_ID || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsRegion: process.env.TENCENTCLOUD_SMS_REGION || "ap-guangzhou",
+    alibabaCloudAccessKeyId: requireAliyunSmsValue(
+      "ALIBABA_CLOUD_ACCESS_KEY_ID",
+      process.env.ALIBABA_CLOUD_ACCESS_KEY_ID || "",
+      smsMode,
+      smsProvider
+    ),
+    alibabaCloudAccessKeySecret: requireAliyunSmsValue(
+      "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+      process.env.ALIBABA_CLOUD_ACCESS_KEY_SECRET || "",
+      smsMode,
+      smsProvider
+    ),
+    aliyunDypnsRegion: process.env.ALIYUN_DYPNS_REGION || "cn-hongkong",
+    aliyunDypnsEndpoint: process.env.ALIYUN_DYPNS_ENDPOINT || "dypnsapi.aliyuncs.com",
+    aliyunSmsSignName: requireAliyunSmsValue(
+      "ALIYUN_SMS_SIGN_NAME",
+      process.env.ALIYUN_SMS_SIGN_NAME || "",
+      smsMode,
+      smsProvider
+    ),
+    aliyunSmsTemplateCode: requireAliyunSmsValue(
+      "ALIYUN_SMS_TEMPLATE_CODE",
+      process.env.ALIYUN_SMS_TEMPLATE_CODE || "",
+      smsMode,
+      smsProvider
+    ),
+    aliyunSmsCountryCode: process.env.ALIYUN_SMS_COUNTRY_CODE || "86",
+    aliyunSmsCodeParamName: process.env.ALIYUN_SMS_CODE_PARAM_NAME || "code",
+    aliyunSmsMinParamName: process.env.ALIYUN_SMS_MIN_PARAM_NAME || "min",
     pgRateLimitEnabled: boolEnv(process.env.PG_RATE_LIMIT_ENABLED, true),
   };
 };

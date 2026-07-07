@@ -63,6 +63,7 @@ requireFile("server/postgres/auth.service.ts");
 requireFile("server/postgres/password.service.ts");
 requireFile("server/postgres/sms.service.ts");
 requireFile("server/postgres/tencentSms.service.ts");
+requireFile("server/postgres/aliyunSms.service.ts");
 requireFile("server/postgres/registration.service.ts");
 requireFile("server/postgres/user.service.ts");
 requireFile("server/postgres/ai.service.ts");
@@ -149,6 +150,7 @@ for (const key of [
   "APPLE_SIGNED_DATA_ONLINE_CHECKS",
   "APPLE_SHARED_SECRET",
   "SMS_MODE",
+  "SMS_PROVIDER",
   "SMS_CODE_HMAC_SECRET",
   "SMS_CODE_TTL_SECONDS",
   "SMS_CODE_MAX_ATTEMPTS",
@@ -163,6 +165,15 @@ for (const key of [
   "TENCENTCLOUD_SMS_SIGN_NAME",
   "TENCENTCLOUD_SMS_TEMPLATE_ID",
   "TENCENTCLOUD_SMS_REGION",
+  "ALIBABA_CLOUD_ACCESS_KEY_ID",
+  "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+  "ALIYUN_DYPNS_REGION",
+  "ALIYUN_DYPNS_ENDPOINT",
+  "ALIYUN_SMS_SIGN_NAME",
+  "ALIYUN_SMS_TEMPLATE_CODE",
+  "ALIYUN_SMS_COUNTRY_CODE",
+  "ALIYUN_SMS_CODE_PARAM_NAME",
+  "ALIYUN_SMS_MIN_PARAM_NAME",
   "PG_RATE_LIMIT_ENABLED",
   "JWT_ACCESS_SECRET",
   "JWT_REFRESH_SECRET",
@@ -342,19 +353,14 @@ if (mode === "production") {
 
   for (const key of [
     "SMS_MODE",
+    "SMS_PROVIDER",
     "SMS_CODE_HMAC_SECRET",
-    "TENCENTCLOUD_SECRET_ID",
-    "TENCENTCLOUD_SECRET_KEY",
-    "TENCENTCLOUD_SMS_SDK_APP_ID",
-    "TENCENTCLOUD_SMS_SIGN_NAME",
-    "TENCENTCLOUD_SMS_TEMPLATE_ID",
-    "TENCENTCLOUD_SMS_REGION",
   ]) {
     add(`production-env:${key}`, Boolean(process.env[key]), process.env[key] ? "set" : "missing");
   }
   add(
     "production-env:SMS_MODE",
-    process.env.SMS_MODE === "tencent",
+    process.env.SMS_MODE === "live",
     process.env.SMS_MODE ? "set" : "missing"
   );
   if ((process.env.SMS_CODE_HMAC_SECRET || "").length < 32) {
@@ -365,19 +371,35 @@ if (mode === "production") {
 
   const appleAuthConfigured = Boolean(process.env.APPLE_CLIENT_ID && process.env.APPLE_BUNDLE_ID);
   const wechatAuthConfigured = Boolean(process.env.WECHAT_APP_ID && process.env.WECHAT_APP_SECRET);
-  const phoneAuthConfigured = process.env.SMS_MODE === "tencent" &&
-    Boolean(
-      process.env.SMS_CODE_HMAC_SECRET &&
-      process.env.TENCENTCLOUD_SECRET_ID &&
-      process.env.TENCENTCLOUD_SECRET_KEY &&
-      process.env.TENCENTCLOUD_SMS_SDK_APP_ID &&
-      process.env.TENCENTCLOUD_SMS_SIGN_NAME &&
-      process.env.TENCENTCLOUD_SMS_TEMPLATE_ID
-    );
+  const smsProvider = String(process.env.SMS_PROVIDER || "tencent").toLowerCase();
+  const requiredSmsProviderEnv = smsProvider === "aliyun_dypns_sms"
+    ? [
+        "ALIBABA_CLOUD_ACCESS_KEY_ID",
+        "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+        "ALIYUN_DYPNS_REGION",
+        "ALIYUN_DYPNS_ENDPOINT",
+        "ALIYUN_SMS_SIGN_NAME",
+        "ALIYUN_SMS_TEMPLATE_CODE",
+        "ALIYUN_SMS_COUNTRY_CODE",
+      ]
+    : [
+        "TENCENTCLOUD_SECRET_ID",
+        "TENCENTCLOUD_SECRET_KEY",
+        "TENCENTCLOUD_SMS_SDK_APP_ID",
+        "TENCENTCLOUD_SMS_SIGN_NAME",
+        "TENCENTCLOUD_SMS_TEMPLATE_ID",
+        "TENCENTCLOUD_SMS_REGION",
+      ];
+  for (const key of requiredSmsProviderEnv) {
+    add(`production-env:${key}`, Boolean(process.env[key]), process.env[key] ? "set" : "missing");
+  }
+  const phoneAuthConfigured = process.env.SMS_MODE === "live" &&
+    Boolean(process.env.SMS_CODE_HMAC_SECRET) &&
+    requiredSmsProviderEnv.every((key) => Boolean(process.env[key]));
   add(
     "production-auth:external-provider",
     appleAuthConfigured || wechatAuthConfigured || phoneAuthConfigured,
-    appleAuthConfigured ? "apple" : wechatAuthConfigured ? "wechat" : phoneAuthConfigured ? "phone_sms" : "missing"
+    appleAuthConfigured ? "apple" : wechatAuthConfigured ? "wechat" : phoneAuthConfigured ? `phone_sms:${smsProvider}` : "missing"
   );
 
   if (process.env.PAYMENTS_MODE !== "live") {

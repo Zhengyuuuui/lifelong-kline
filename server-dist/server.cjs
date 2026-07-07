@@ -864,8 +864,9 @@ var aiKeyEnv = (provider) => {
   if (provider === "anthropic") return process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY || "";
   return process.env.GEMINI_API_KEY || process.env.AI_API_KEY || process.env.API_KEY || "";
 };
-var requireStrongSecret = (name, value, nodeEnv) => {
-  if (nodeEnv === "production" && value.length < 32) {
+var isProductionAppEnv = (appEnv) => appEnv === "production";
+var requireStrongSecret = (name, value, appEnv) => {
+  if (isProductionAppEnv(appEnv) && value.length < 32) {
     throw new Error(`${name} must be at least 32 characters in production.`);
   }
   return value;
@@ -876,13 +877,16 @@ var appEnvValue = (value, nodeEnv) => {
     if (nodeEnv === "production") {
       throw new Error("APP_ENV must be explicitly set to staging or production when NODE_ENV=production.");
     }
-    return "sandbox";
+    return "development";
   }
-  if (!["sandbox", "staging", "production"].includes(normalized)) {
-    throw new Error("APP_ENV must be sandbox, staging, or production.");
+  if (!["development", "sandbox", "staging", "production"].includes(normalized)) {
+    throw new Error("APP_ENV must be development, staging, or production.");
   }
-  if (nodeEnv === "production" && normalized === "sandbox") {
-    throw new Error("APP_ENV=sandbox is not allowed when NODE_ENV=production.");
+  if (nodeEnv === "production" && (normalized === "development" || normalized === "sandbox")) {
+    throw new Error("APP_ENV=development/sandbox is not allowed when NODE_ENV=production. Use APP_ENV=staging for production-build dry runs.");
+  }
+  if ((normalized === "staging" || normalized === "production") && nodeEnv !== "production") {
+    throw new Error("APP_ENV=staging/production requires NODE_ENV=production.");
   }
   return normalized;
 };
@@ -890,10 +894,10 @@ var paymentProviderEnv = (value) => {
   const normalized = String(value || "xunhupay").toLowerCase();
   return normalized === "xunhupay" ? "xunhupay" : "apple_iap";
 };
-var paymentModeEnv = (value, nodeEnv, paymentsProvider) => {
+var paymentModeEnv = (value, appEnv, paymentsProvider) => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
-    if (nodeEnv === "production" && paymentsProvider === "xunhupay") {
+    if (isProductionAppEnv(appEnv) && paymentsProvider === "xunhupay") {
       throw new Error("PAYMENTS_MODE=live is required for Xunhupay in production.");
     }
     return "mock";
@@ -901,7 +905,7 @@ var paymentModeEnv = (value, nodeEnv, paymentsProvider) => {
   if (normalized !== "mock" && normalized !== "live") {
     throw new Error("PAYMENTS_MODE must be either mock or live.");
   }
-  if (nodeEnv === "production" && paymentsProvider === "xunhupay" && normalized !== "live") {
+  if (isProductionAppEnv(appEnv) && paymentsProvider === "xunhupay" && normalized !== "live") {
     throw new Error("PAYMENTS_MODE=mock is not allowed for Xunhupay in production.");
   }
   return normalized;
@@ -931,30 +935,43 @@ var boundedIntEnv = (name, value, fallback, min, max) => {
   }
   return parsed;
 };
-var smsModeEnv = (value, nodeEnv) => {
+var smsModeEnv = (value, appEnv) => {
   const normalized = String(value || "").trim().toLowerCase();
   if (!normalized) {
-    if (nodeEnv === "production") {
-      throw new Error("SMS_MODE=tencent is required when NODE_ENV=production.");
+    if (isProductionAppEnv(appEnv)) {
+      throw new Error("SMS_MODE=live is required when APP_ENV=production.");
     }
     return "disabled";
   }
-  if (!["disabled", "mock", "tencent"].includes(normalized)) {
-    throw new Error("SMS_MODE must be disabled, mock, or tencent.");
+  if (normalized === "tencent") {
+    return "live";
   }
-  if (nodeEnv === "production" && normalized !== "tencent") {
-    throw new Error("SMS_MODE=mock/disabled is not allowed when NODE_ENV=production.");
+  if (!["disabled", "mock", "live"].includes(normalized)) {
+    throw new Error("SMS_MODE must be disabled, mock, or live.");
+  }
+  if (isProductionAppEnv(appEnv) && normalized !== "live") {
+    throw new Error("SMS_MODE=mock/disabled is not allowed when APP_ENV=production.");
   }
   return normalized;
 };
-var requireSmsHmacSecret = (value, smsMode, nodeEnv) => {
+var smsProviderEnv = (value, smsMode) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "tencent";
+  if (normalized === "tencent" || normalized === "tencent_sms") return "tencent";
+  if (normalized === "aliyun_dypns_sms" || normalized === "aliyun") return "aliyun_dypns_sms";
+  if (smsMode === "live") {
+    throw new Error("SMS_PROVIDER must be tencent or aliyun_dypns_sms when SMS_MODE=live.");
+  }
+  return "tencent";
+};
+var requireSmsHmacSecret = (value, smsMode, appEnv) => {
   if (smsMode === "disabled") return value;
   if (!value) throw new Error("SMS_CODE_HMAC_SECRET is required when SMS_MODE is enabled.");
   if (value.length < 32) {
     throw new Error("SMS_CODE_HMAC_SECRET must be at least 32 characters.");
   }
-  if (nodeEnv === "production") {
-    requireStrongSecret("SMS_CODE_HMAC_SECRET", value, nodeEnv);
+  if (isProductionAppEnv(appEnv)) {
+    requireStrongSecret("SMS_CODE_HMAC_SECRET", value, appEnv);
   }
   return value;
 };
@@ -965,9 +982,16 @@ var requireSmsMockCode = (value, smsMode) => {
   }
   return value;
 };
-var requireTencentSmsValue = (name, value, smsMode) => {
-  if (smsMode !== "tencent") return value;
-  if (!value) throw new Error(`${name} is required when SMS_MODE=tencent.`);
+var requireTencentSmsValue = (name, value, smsMode, smsProvider) => {
+  if (smsMode !== "live" || smsProvider !== "tencent") return value;
+  if (!value) throw new Error(`${name} is required when SMS_MODE=live and SMS_PROVIDER=tencent.`);
+  return value;
+};
+var requireAliyunSmsValue = (name, value, smsMode, smsProvider) => {
+  if (smsMode !== "live" || smsProvider !== "aliyun_dypns_sms") return value;
+  if (!value) {
+    throw new Error(`${name} is required when SMS_MODE=live and SMS_PROVIDER=aliyun_dypns_sms.`);
+  }
   return value;
 };
 var getBackendConfig = () => {
@@ -975,15 +999,16 @@ var getBackendConfig = () => {
   const appEnv = appEnvValue(process.env.APP_ENV, nodeEnv);
   const aiProvider = aiProviderEnv(process.env.AI_PROVIDER);
   const paymentsProvider = paymentProviderEnv(process.env.PAYMENTS_PROVIDER);
-  const paymentsMode = paymentModeEnv(process.env.PAYMENTS_MODE, nodeEnv, paymentsProvider);
-  const smsMode = smsModeEnv(process.env.SMS_MODE, nodeEnv);
+  const paymentsMode = paymentModeEnv(process.env.PAYMENTS_MODE, appEnv, paymentsProvider);
+  const smsMode = smsModeEnv(process.env.SMS_MODE, appEnv);
+  const smsProvider = smsProviderEnv(process.env.SMS_PROVIDER, smsMode);
   const appleIapEnv = process.env.APPLE_IAP_ENV === "production" ? "production" : "sandbox";
   const jwtAccessSecret = process.env.JWT_ACCESS_SECRET || "dev-only-access-secret-change-before-release";
   const jwtRefreshSecret = process.env.JWT_REFRESH_SECRET || "dev-only-refresh-secret-change-before-release";
   const smsCodeHmacSecret = requireSmsHmacSecret(
     process.env.SMS_CODE_HMAC_SECRET || "",
     smsMode,
-    nodeEnv
+    appEnv
   );
   const smsMockCode = requireSmsMockCode(process.env.SMS_MOCK_CODE || "", smsMode);
   const publicSiteUrl = process.env.PUBLIC_SITE_URL || "";
@@ -1014,8 +1039,8 @@ var getBackendConfig = () => {
     pgPoolMax: intEnv(process.env.PG_POOL_MAX, 10),
     pgStatementTimeoutMs: intEnv(process.env.PG_STATEMENT_TIMEOUT_MS, 15e3),
     pgIdleTimeoutMs: intEnv(process.env.PG_IDLE_TIMEOUT_MS, 3e4),
-    jwtAccessSecret: requireStrongSecret("JWT_ACCESS_SECRET", jwtAccessSecret, nodeEnv),
-    jwtRefreshSecret: requireStrongSecret("JWT_REFRESH_SECRET", jwtRefreshSecret, nodeEnv),
+    jwtAccessSecret: requireStrongSecret("JWT_ACCESS_SECRET", jwtAccessSecret, appEnv),
+    jwtRefreshSecret: requireStrongSecret("JWT_REFRESH_SECRET", jwtRefreshSecret, appEnv),
     jwtIssuer: process.env.JWT_ISSUER || "life-kline-api",
     jwtAudience: process.env.JWT_AUDIENCE || "life-kline-ios",
     jwtAccessTtlSeconds: intEnv(process.env.JWT_ACCESS_TTL_SECONDS, 900),
@@ -1062,6 +1087,7 @@ var getBackendConfig = () => {
     xunhupayCallbackUrl,
     publicSiteUrl,
     smsMode,
+    smsProvider,
     smsCodeHmacSecret,
     smsCodeTtlSeconds: boundedIntEnv("SMS_CODE_TTL_SECONDS", process.env.SMS_CODE_TTL_SECONDS, 300, 60, 1800),
     smsCodeMaxAttempts: boundedIntEnv("SMS_CODE_MAX_ATTEMPTS", process.env.SMS_CODE_MAX_ATTEMPTS, 5, 1, 20),
@@ -1073,29 +1099,63 @@ var getBackendConfig = () => {
     tencentCloudSecretId: requireTencentSmsValue(
       "TENCENTCLOUD_SECRET_ID",
       process.env.TENCENTCLOUD_SECRET_ID || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSecretKey: requireTencentSmsValue(
       "TENCENTCLOUD_SECRET_KEY",
       process.env.TENCENTCLOUD_SECRET_KEY || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsSdkAppId: requireTencentSmsValue(
       "TENCENTCLOUD_SMS_SDK_APP_ID",
       process.env.TENCENTCLOUD_SMS_SDK_APP_ID || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsSignName: requireTencentSmsValue(
       "TENCENTCLOUD_SMS_SIGN_NAME",
       process.env.TENCENTCLOUD_SMS_SIGN_NAME || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsTemplateId: requireTencentSmsValue(
       "TENCENTCLOUD_SMS_TEMPLATE_ID",
       process.env.TENCENTCLOUD_SMS_TEMPLATE_ID || "",
-      smsMode
+      smsMode,
+      smsProvider
     ),
     tencentCloudSmsRegion: process.env.TENCENTCLOUD_SMS_REGION || "ap-guangzhou",
+    alibabaCloudAccessKeyId: requireAliyunSmsValue(
+      "ALIBABA_CLOUD_ACCESS_KEY_ID",
+      process.env.ALIBABA_CLOUD_ACCESS_KEY_ID || "",
+      smsMode,
+      smsProvider
+    ),
+    alibabaCloudAccessKeySecret: requireAliyunSmsValue(
+      "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+      process.env.ALIBABA_CLOUD_ACCESS_KEY_SECRET || "",
+      smsMode,
+      smsProvider
+    ),
+    aliyunDypnsRegion: process.env.ALIYUN_DYPNS_REGION || "cn-hongkong",
+    aliyunDypnsEndpoint: process.env.ALIYUN_DYPNS_ENDPOINT || "dypnsapi.aliyuncs.com",
+    aliyunSmsSignName: requireAliyunSmsValue(
+      "ALIYUN_SMS_SIGN_NAME",
+      process.env.ALIYUN_SMS_SIGN_NAME || "",
+      smsMode,
+      smsProvider
+    ),
+    aliyunSmsTemplateCode: requireAliyunSmsValue(
+      "ALIYUN_SMS_TEMPLATE_CODE",
+      process.env.ALIYUN_SMS_TEMPLATE_CODE || "",
+      smsMode,
+      smsProvider
+    ),
+    aliyunSmsCountryCode: process.env.ALIYUN_SMS_COUNTRY_CODE || "86",
+    aliyunSmsCodeParamName: process.env.ALIYUN_SMS_CODE_PARAM_NAME || "code",
+    aliyunSmsMinParamName: process.env.ALIYUN_SMS_MIN_PARAM_NAME || "min",
     pgRateLimitEnabled: boolEnv2(process.env.PG_RATE_LIMIT_ENABLED, true)
   };
 };
@@ -3384,6 +3444,56 @@ var TencentSmsService = class {
   }
 };
 
+// server/postgres/aliyunSms.service.ts
+var import_dypnsapi20170525 = __toESM(require("@alicloud/dypnsapi20170525"), 1);
+var import_utils = require("@alicloud/openapi-core/dist/utils.js");
+var normalizePhoneForAliyun = (phone, countryCode) => {
+  const compact = phone.replace(/[\s().-]/g, "");
+  if (countryCode === "86" && compact.startsWith("+86")) {
+    return compact.slice(3);
+  }
+  return compact.replace(/^\+/, "");
+};
+var AliyunSmsService = class {
+  async sendVerificationCode(input) {
+    const config = getBackendConfig();
+    const client = new import_dypnsapi20170525.default(new import_utils.Config({
+      accessKeyId: config.alibabaCloudAccessKeyId,
+      accessKeySecret: config.alibabaCloudAccessKeySecret,
+      regionId: config.aliyunDypnsRegion,
+      endpoint: config.aliyunDypnsEndpoint
+    }));
+    const templateParam = {
+      [config.aliyunSmsCodeParamName]: input.code,
+      [config.aliyunSmsMinParamName]: String(Math.ceil(input.ttlSeconds / 60))
+    };
+    const response = await client.sendSmsVerifyCode(
+      new import_dypnsapi20170525.SendSmsVerifyCodeRequest({
+        countryCode: config.aliyunSmsCountryCode,
+        phoneNumber: normalizePhoneForAliyun(input.phone, config.aliyunSmsCountryCode),
+        signName: config.aliyunSmsSignName,
+        templateCode: config.aliyunSmsTemplateCode,
+        templateParam: JSON.stringify(templateParam),
+        validTime: input.ttlSeconds,
+        interval: config.smsSendCooldownSeconds,
+        duplicatePolicy: 1,
+        autoRetry: 1,
+        returnVerifyCode: false,
+        outId: input.challengeId
+      })
+    ).catch(() => {
+      throw new HttpError(502, "Sms provider unavailable");
+    });
+    const body = response.body;
+    if (!body?.success || body.code !== "OK") {
+      throw new HttpError(502, "Sms provider unavailable");
+    }
+    return {
+      requestId: body.model?.requestId || body.model?.bizId || body.requestId || ""
+    };
+  }
+};
+
 // server/postgres/sms.service.ts
 var normalizeIp4 = (value) => {
   if (!value) return null;
@@ -3416,7 +3526,8 @@ var verifySmsCodeHash = (challengeId, purpose, phoneHash, code, expectedHash) =>
 var generateCode = () => String((0, import_node_crypto7.randomInt)(0, 1e6)).padStart(6, "0");
 var SmsService = class {
   constructor() {
-    this.provider = new TencentSmsService();
+    this.tencentProvider = new TencentSmsService();
+    this.aliyunProvider = new AliyunSmsService();
   }
   async sendRegisterCode(payload, meta) {
     const config = getBackendConfig();
@@ -3546,7 +3657,7 @@ var SmsService = class {
       purpose: payload.purpose,
       phoneHash,
       deviceHash,
-      provider: config.smsMode
+      provider: config.smsMode === "mock" ? "mock" : config.smsProvider
     }, meta);
     return {
       ok: true,
@@ -3576,8 +3687,11 @@ var SmsService = class {
     if (config.smsMode === "mock") {
       return { requestId: `mock:${input.challengeId}` };
     }
-    if (config.smsMode === "tencent") {
-      return this.provider.sendVerificationCode(input);
+    if (config.smsMode === "live" && config.smsProvider === "tencent") {
+      return this.tencentProvider.sendVerificationCode(input);
+    }
+    if (config.smsMode === "live" && config.smsProvider === "aliyun_dypns_sms") {
+      return this.aliyunProvider.sendVerificationCode(input);
     }
     throw new HttpError(503, "SMS registration is not configured");
   }

@@ -457,6 +457,7 @@ export default function App() {
     // --- PAYMENT STATE (Simulated) ---
 	    const [isPremium, setIsPremium] = useState(false);
     const [showPaywall, setShowPaywall] = useState(false);
+    const [showMembershipIntro, setShowMembershipIntro] = useState(false);
         const canUseAiRequests = () => authStatus === 'authenticated';
     const profileForPreview = userProfile || guestProfile;
 
@@ -621,6 +622,11 @@ export default function App() {
 
     const handleLockedContentUnlock = () => {
         if (isPremium) return;
+        setShowMembershipIntro(true);
+    };
+
+    const handleMembershipPaymentRequest = () => {
+        setShowMembershipIntro(false);
         if (authStatus === 'authenticated') {
             setShowPaywall(true);
             return;
@@ -708,6 +714,7 @@ export default function App() {
             setLoading(false);
             setShowActivation(false);
             setShowPaywall(false);
+            setShowMembershipIntro(false);
             setShowInsightSheet(false);
             setIsFullscreenBook(false);
             setFullscreenLifeBookData(null);
@@ -1167,6 +1174,7 @@ export default function App() {
         setShowAuth(false);
         setShowActivation(false);
         setShowPaywall(false);
+        setShowMembershipIntro(false);
         setShowInsightSheet(false);
         setIsFullscreenBook(false);
         setFullscreenLifeBookData(null);
@@ -1393,6 +1401,24 @@ export default function App() {
         )
         : null;
 
+    const membershipIntroOverlay = showMembershipIntro
+        ? createPortal(
+            <div style={{ pointerEvents: 'auto' }}>
+                <UserCenter
+                    isOpen={showMembershipIntro}
+                    onClose={() => setShowMembershipIntro(false)}
+                    userProfile={userProfile || undefined}
+                    user={currentUser || undefined}
+                    identities={identities}
+                    isPremium={isPremium}
+                    membershipOnly
+                    onRequirePayment={handleMembershipPaymentRequest}
+                />
+            </div>,
+            getPaymentPortalHost()
+        )
+        : null;
+
     const NavItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) => (
         <button
             onClick={onClick}
@@ -1411,6 +1437,7 @@ export default function App() {
     return (
         <>
         {fullscreenBookOverlay}
+        {membershipIntroOverlay}
         {paymentModalOverlay}
         <div className="h-[100dvh] bg-[#050505] text-slate-200 font-sans selection:bg-amber-500/30 overflow-hidden relative">
 
