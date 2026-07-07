@@ -21,6 +21,7 @@
     "db:postgres:migrate": "tsx scripts/postgres-migrate.ts",
     "test-user:phone": "tsx scripts/create-test-phone-user.ts",
     "test:sms-registration": "tsx scripts/sms-registration-test.ts",
+    "test:sms-auth": "tsx scripts/sms-auth-test.ts",
     "ios:add": "npm run build:web && cap add ios",
     "ios:sync": "npm run build:web && cap sync ios",
     "ios:clean-xattrs": "xattr -cr ios/App/App ios/App/CapApp-SPM || true",

@@ -120,10 +120,11 @@ const mapPreferences = (row?: PreferenceRow) => {
 export class UserService {
   async getMe(userId: string) {
     const user = await this.getUser(userId);
-    const [profile, membership, preferences] = await Promise.all([
+    const [profile, membership, preferences, accountSecurity] = await Promise.all([
       this.getProfile(userId),
       this.getActiveMembership(userId),
       this.getPreferences(userId),
+      this.getAccountSecurity(userId),
     ]);
 
     return {
@@ -133,6 +134,24 @@ export class UserService {
       profile: mapProfile(profile || undefined),
       membership: mapMembership(membership || undefined),
       settings: mapPreferences(preferences || undefined),
+      accountSecurity,
+    };
+  }
+
+  async getAccountSecurity(userId: string) {
+    await this.getUser(userId);
+    const result = await query<{ has_password: boolean }>(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM password_credentials
+          WHERE user_id = $1
+        ) AS has_password
+      `,
+      [userId]
+    );
+    return {
+      hasPassword: result.rows[0]?.has_password === true,
     };
   }
 

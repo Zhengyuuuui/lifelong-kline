@@ -37,12 +37,12 @@ import { storage } from './services/storageService';
 import {
     backendClient,
     type AuthIdentity,
+    type AuthSmsPayload,
     type AuthProvider,
     type BackendBundle,
     type BackendUser,
-    type PhoneRegisterPayload,
     type PasswordLoginPayload,
-    type RegistrationSmsPayload,
+    type SmsAuthPayload,
 } from './services/backendClient';
 import { AUTH_INVALIDATED_EVENT, clearAuthTokens } from './services/apiBase';
 import { iosProductionBridge } from './services/iosProductionBridge';
@@ -402,6 +402,7 @@ export default function App() {
     const [postProfileIntent, setPostProfileIntent] = useState<PostProfileIntent | null>(null);
     const [currentUser, setCurrentUser] = useState<BackendUser | null>(null);
     const [identities, setIdentities] = useState<AuthIdentity[]>([]);
+    const [accountSecurity, setAccountSecurity] = useState<BackendBundle['accountSecurity']>(undefined);
     const [userProfile, setUserProfile] = useState<UserInputProfile | null>(null);
     const [guestProfile, setGuestProfile] = useState<UserInputProfile | null>(null);
     const [guestBazi, setGuestBazi] = useState<UserBaziMeta | null>(null);
@@ -546,6 +547,9 @@ export default function App() {
         }
         if (bundle.identities !== undefined) {
             setIdentities(bundle.identities);
+        }
+        if (bundle.accountSecurity !== undefined) {
+            setAccountSecurity(bundle.accountSecurity);
         }
 
         if (bundle.profile !== undefined) {
@@ -706,6 +710,7 @@ export default function App() {
             setAuthStatus('anonymous');
             setCurrentUser(null);
             setIdentities([]);
+            setAccountSecurity(undefined);
             setUserProfile(null);
             setPostProfileIntent(null);
             setIsPremium(false);
@@ -789,6 +794,7 @@ export default function App() {
         setUserProfile(null);
         setCurrentUser(null);
         setIdentities([]);
+        setAccountSecurity(undefined);
         setIsPremium(false);
         setCachedBaziReport(null);
         setGuestProfile(cachedGuestProfile);
@@ -1142,11 +1148,11 @@ export default function App() {
         await finishAuthenticatedLogin();
     };
 
-    const handleSendRegistrationSms = (payload: RegistrationSmsPayload) =>
-        backendClient.sendRegistrationSms(payload);
+    const handleSendAuthSms = (payload: AuthSmsPayload) =>
+        backendClient.sendAuthSms(payload);
 
-    const handlePhoneRegister = async (payload: PhoneRegisterPayload) => {
-        await backendClient.registerWithPhone(payload);
+    const handleSmsAuth = async (payload: SmsAuthPayload) => {
+        await backendClient.verifySmsAuth(payload);
         await finishAuthenticatedLogin();
     };
 
@@ -1168,6 +1174,7 @@ export default function App() {
         setUserProfile(null);
         setCurrentUser(null);
         setIdentities([]);
+        setAccountSecurity(undefined);
         setAuthStatus('anonymous');
         setAuthIntent(null);
         setPostProfileIntent(null);
@@ -1186,7 +1193,13 @@ export default function App() {
         setRingsData(generateRingsData(null));
     };
 
-    const handlePasswordChanged = () => {
+    const handlePasswordChanged = async (action: 'set' | 'change') => {
+        if (action === 'set') {
+            const bundle = await backendClient.getMe();
+            applyBackendBundle(bundle);
+            setAuthNotice('登录密码已设置。');
+            return;
+        }
         handleUserLogout();
         setAuthNotice('密码修改成功，请使用新密码重新登录。');
         requireAuth({ type: 'open_user_center' });
@@ -1410,6 +1423,7 @@ export default function App() {
                     userProfile={userProfile || undefined}
                     user={currentUser || undefined}
                     identities={identities}
+                    accountSecurity={accountSecurity}
                     isPremium={isPremium}
                     membershipOnly
                     onRequirePayment={handleMembershipPaymentRequest}
@@ -1476,8 +1490,8 @@ export default function App() {
                     setAuthNotice(null);
                 }}
                 onPasswordLogin={handlePasswordLogin}
-                onSendRegistrationSms={handleSendRegistrationSms}
-                onPhoneRegister={handlePhoneRegister}
+                onSendAuthSms={handleSendAuthSms}
+                onSmsAuth={handleSmsAuth}
                 onNativeLoginSuccess={handleNativeAuthSuccess}
             />
 
@@ -1788,6 +1802,7 @@ export default function App() {
                         userProfile={userProfile}
                         user={currentUser}
                         identities={identities}
+                        accountSecurity={accountSecurity}
                         onLogout={handleUserLogout}
                         onPasswordChanged={handlePasswordChanged}
                         isPremium={isPremium}

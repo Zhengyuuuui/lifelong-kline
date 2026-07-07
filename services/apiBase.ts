@@ -117,6 +117,7 @@ export const apiFetch = async (path: string, init: RequestInit = {}) => {
     "/api/auth/refresh",
     "/api/auth/logout",
     "/api/auth/sms/send",
+    "/api/auth/sms/verify",
     "/api/auth/register/phone",
     "/api/auth/password/login",
     "/api/auth/apple",

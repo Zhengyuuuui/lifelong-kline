@@ -39,12 +39,22 @@ export interface PasswordChangePayload {
   newPassword: string;
 }
 
-export type SmsPurpose = "register";
+export interface PasswordSetPayload {
+  newPassword: string;
+}
+
+export type SmsPurpose = "register" | "auth";
 
 export interface SmsSendPayload {
   phone: string;
   purpose: SmsPurpose;
   deviceId: string;
+}
+
+export interface SmsVerifyPayload {
+  challengeId: string;
+  phone: string;
+  code: string;
 }
 
 export interface PhoneRegisterPayload {
@@ -133,6 +143,14 @@ export const normalizeE164Phone = (value: unknown) => {
   return normalized;
 };
 
+export const normalizeMainlandChinaPhone = (value: unknown) => {
+  const normalized = normalizeE164Phone(value);
+  if (!/^\+861[3-9]\d{9}$/.test(normalized)) {
+    throw new ValidationError({ phone: "Unsupported phone region" });
+  }
+  return normalized;
+};
+
 export const sha256Base64Url = (value: string) =>
   createHash("sha256").update(value).digest("base64url");
 
@@ -189,6 +207,13 @@ export const validatePasswordChangePayload = (body: unknown): PasswordChangePayl
   };
 };
 
+export const validatePasswordSetPayload = (body: unknown): PasswordSetPayload => {
+  if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
+  return {
+    newPassword: validateCredentialPassword(passwordValue(body.newPassword), "newPassword"),
+  };
+};
+
 const normalizeDeviceId = (value: unknown) => {
   const deviceId = str(value, 128);
   if (!DEVICE_ID_RE.test(deviceId)) {
@@ -201,12 +226,27 @@ export const validateSmsSendPayload = (body: unknown): SmsSendPayload => {
   if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
   const purpose = str(body.purpose, 32) as SmsPurpose;
   const details: Record<string, string> = {};
-  if (purpose !== "register") details.purpose = "Unsupported SMS purpose";
+  if (!["register", "auth"].includes(purpose)) details.purpose = "Unsupported SMS purpose";
   if (Object.keys(details).length) throw new ValidationError(details);
   return {
-    phone: normalizeE164Phone(body.phone),
+    phone: normalizeMainlandChinaPhone(body.phone),
     purpose,
     deviceId: normalizeDeviceId(body.deviceId),
+  };
+};
+
+export const validateSmsVerifyPayload = (body: unknown): SmsVerifyPayload => {
+  if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
+  const challengeId = str(body.challengeId, 64);
+  const code = str(body.code, 16);
+  const details: Record<string, string> = {};
+  if (!UUID_RE.test(challengeId)) details.challengeId = "Expected challenge UUID";
+  if (!/^\d{6}$/.test(code)) details.code = "Expected 6-digit verification code";
+  if (Object.keys(details).length) throw new ValidationError(details);
+  return {
+    challengeId,
+    phone: normalizeMainlandChinaPhone(body.phone),
+    code,
   };
 };
 

@@ -304,6 +304,54 @@ export class PasswordService {
     return { ok: true, refreshTokensRevoked: true };
   }
 
+  async setPassword(userId: string, newPassword: string, meta: RequestMeta) {
+    await withTransaction(async (client) => {
+      const userResult = await client.query<{ id: string }>(
+        `
+          SELECT id
+          FROM users
+          WHERE id = $1 AND status = 'active' AND deleted_at IS NULL
+          FOR UPDATE
+        `,
+        [userId]
+      );
+      if (!userResult.rows[0]) throw new HttpError(401, "User is not active");
+
+      const existingCredential = await client.query<{ user_id: string }>(
+        "SELECT user_id FROM password_credentials WHERE user_id = $1 FOR UPDATE",
+        [userId]
+      );
+      if (existingCredential.rows[0]) {
+        throw new HttpError(409, "Password already exists; use changePassword");
+      }
+
+      await client.query(
+        `
+          INSERT INTO password_credentials (
+            user_id,
+            password_hash,
+            algorithm,
+            algorithm_version,
+            password_changed_at
+          )
+          VALUES ($1, $2, $3, $4, now())
+        `,
+        [
+          userId,
+          await hashPasswordCredential(newPassword),
+          PASSWORD_ALGORITHM,
+          PASSWORD_ALGORITHM_VERSION,
+        ]
+      );
+      await this.audit(client, userId, "auth.password.set_success", {
+        algorithm: PASSWORD_ALGORITHM,
+        algorithmVersion: PASSWORD_ALGORITHM_VERSION,
+      }, meta);
+    });
+
+    return { ok: true };
+  }
+
   async provisionLocalTestPhoneUser(input: {
     phone: string;
     password: string;

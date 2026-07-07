@@ -61,6 +61,9 @@ export interface BackendConfig {
   smsSendIpLimit: number;
   smsSendPhoneLimit: number;
   smsSendDeviceLimit: number;
+  smsAuthRegisterIpDailyLimit: number;
+  smsAuthRegisterDeviceDailyLimit: number;
+  smsAuthRegisterPhoneDailyLimit: number;
   smsMockCode: string;
   tencentCloudSecretId: string;
   tencentCloudSecretKey: string;
@@ -393,6 +396,27 @@ export const getBackendConfig = (): BackendConfig => {
     smsSendIpLimit: boundedIntEnv("SMS_SEND_IP_LIMIT", process.env.SMS_SEND_IP_LIMIT, 20, 1, 1000),
     smsSendPhoneLimit: boundedIntEnv("SMS_SEND_PHONE_LIMIT", process.env.SMS_SEND_PHONE_LIMIT, 5, 1, 200),
     smsSendDeviceLimit: boundedIntEnv("SMS_SEND_DEVICE_LIMIT", process.env.SMS_SEND_DEVICE_LIMIT, 10, 1, 500),
+    smsAuthRegisterIpDailyLimit: boundedIntEnv(
+      "SMS_AUTH_REGISTER_IP_DAILY_LIMIT",
+      process.env.SMS_AUTH_REGISTER_IP_DAILY_LIMIT,
+      20,
+      1,
+      10000
+    ),
+    smsAuthRegisterDeviceDailyLimit: boundedIntEnv(
+      "SMS_AUTH_REGISTER_DEVICE_DAILY_LIMIT",
+      process.env.SMS_AUTH_REGISTER_DEVICE_DAILY_LIMIT,
+      5,
+      1,
+      10000
+    ),
+    smsAuthRegisterPhoneDailyLimit: boundedIntEnv(
+      "SMS_AUTH_REGISTER_PHONE_DAILY_LIMIT",
+      process.env.SMS_AUTH_REGISTER_PHONE_DAILY_LIMIT,
+      1,
+      1,
+      100
+    ),
     smsMockCode,
     tencentCloudSecretId: requireTencentSmsValue(
       "TENCENTCLOUD_SECRET_ID",

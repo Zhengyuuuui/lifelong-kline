@@ -13,11 +13,11 @@ import {
     X,
 } from 'lucide-react';
 import type {
+    AuthSmsPayload,
     AuthProvider,
     PasswordLoginPayload,
-    PhoneRegisterPayload,
-    RegistrationSmsPayload,
     RegistrationSmsResult,
+    SmsAuthPayload,
 } from '../services/backendClient';
 import { iosProductionBridge } from '../services/iosProductionBridge';
 
@@ -26,16 +26,19 @@ interface AuthModalProps {
     notice?: string | null;
     onClose: () => void;
     onPasswordLogin: (payload: PasswordLoginPayload) => void | Promise<void>;
-    onSendRegistrationSms: (payload: RegistrationSmsPayload) => Promise<RegistrationSmsResult>;
-    onPhoneRegister: (payload: PhoneRegisterPayload) => void | Promise<void>;
+    onSendAuthSms: (payload: AuthSmsPayload) => Promise<RegistrationSmsResult>;
+    onSmsAuth: (payload: SmsAuthPayload) => void | Promise<void>;
     onNativeLoginSuccess: (provider: AuthProvider) => void | Promise<void>;
 }
 
 class AuthInputError extends Error {}
 
-type AuthMode = 'login' | 'register';
+type AuthMode = 'sms' | 'password';
 
 const normalizePhoneToE164 = (countryCode: string, phone: string) => {
+    if (countryCode !== '+86') {
+        throw new AuthInputError('当前仅支持中国大陆 +86 手机号。');
+    }
     const compact = phone.trim().replace(/[\s().-]/g, '');
     const localDigits = compact.replace(/^0+/, '');
     const countryDigits = countryCode.replace(/^\+/, '');
@@ -44,8 +47,8 @@ const normalizePhoneToE164 = (countryCode: string, phone: string) => {
         : localDigits.startsWith(countryDigits)
             ? `+${localDigits}`
             : `${countryCode}${localDigits}`;
-    if (!/^\+[1-9]\d{7,14}$/.test(candidate)) {
-        throw new AuthInputError('请输入有效的手机号。');
+    if (!/^\+861[3-9]\d{9}$/.test(candidate)) {
+        throw new AuthInputError('请输入正确的中国大陆手机号。');
     }
     return candidate;
 };
@@ -61,23 +64,23 @@ const loginErrorMessage = (error: unknown) => {
 
 const smsErrorMessage = (error: unknown) => {
     const status = (error as { status?: number }).status;
-    if (status === 422) return '请输入有效的手机号。';
-    if (status === 409) return '手机号已注册，请直接登录。';
+    if (status === 422) return '请输入正确的中国大陆手机号。';
+    if (status === 409) return '验证码已失效，请重新获取。';
     if (status === 429) return '验证码发送过于频繁，请稍后再试。';
     if (status === 503) return '短信服务暂不可用，请稍后再试。';
     if (!status) return '网络异常，请检查连接后重试。';
     return '验证码发送失败，请稍后重试。';
 };
 
-const registerErrorMessage = (error: unknown) => {
+const smsAuthErrorMessage = (error: unknown) => {
     const status = (error as { status?: number }).status;
-    if (status === 422) return '手机号、验证码或密码格式错误。';
-    if (status === 409) return '手机号已注册，请直接登录。';
+    if (status === 422) return '手机号或验证码格式错误。';
+    if (status === 409) return '验证码已失效，请重新获取。';
     if (status === 410) return '验证码已过期，请重新获取。';
     if (status === 429) return '操作过于频繁，请稍后再试。';
     if (status === 503) return '短信服务暂不可用，请稍后再试。';
     if (!status) return '网络异常，请检查连接后重试。';
-    return '注册暂时不可用，请稍后重试。';
+    return '登录 / 注册暂时不可用，请稍后重试。';
 };
 
 const passwordLength = (value: string) => Array.from(value).length;
@@ -87,20 +90,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     notice,
     onClose,
     onPasswordLogin,
-    onSendRegistrationSms,
-    onPhoneRegister,
+    onSendAuthSms,
+    onSmsAuth,
     onNativeLoginSuccess,
 }) => {
-    const [mode, setMode] = useState<AuthMode>('login');
+    const [mode, setMode] = useState<AuthMode>('sms');
     const [countryCode, setCountryCode] = useState('+86');
     const [phone, setPhone] = useState('');
     const [password, setPassword] = useState('');
-    const [confirmPassword, setConfirmPassword] = useState('');
     const [smsCode, setSmsCode] = useState('');
     const [challengeId, setChallengeId] = useState<string | null>(null);
     const [smsCountdown, setSmsCountdown] = useState(0);
     const [showPassword, setShowPassword] = useState(false);
-    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [smsLoading, setSmsLoading] = useState(false);
     const [authError, setAuthError] = useState<string | null>(null);
@@ -129,13 +130,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     useEffect(() => {
         if (!isOpen) {
+            setMode('sms');
             setPassword('');
-            setConfirmPassword('');
             setSmsCode('');
             setChallengeId(null);
             setSmsCountdown(0);
             setShowPassword(false);
-            setShowConfirmPassword(false);
             setLoading(false);
             setSmsLoading(false);
             setAuthError(null);
@@ -144,7 +144,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
     const handlePhoneChange = (value: string) => {
         setPhone(value);
-        if (mode === 'register') {
+        if (mode === 'sms') {
             setChallengeId(null);
             setSmsCode('');
             setSmsCountdown(0);
@@ -156,12 +156,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         setMode(nextMode);
         setAuthError(null);
         setPassword('');
-        setConfirmPassword('');
         setSmsCode('');
         setChallengeId(null);
         setSmsCountdown(0);
         setShowPassword(false);
-        setShowConfirmPassword(false);
     };
 
     const handlePasswordLogin = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -187,16 +185,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
     };
 
-    const handleSendRegistrationSms = async () => {
+    const handleSendAuthSms = async () => {
         if (loading || smsLoading || smsCountdown > 0) return;
 
         setAuthError(null);
         try {
             const normalizedPhone = normalizePhoneToE164(countryCode, phone);
             setSmsLoading(true);
-            const result = await onSendRegistrationSms({
+            const result = await onSendAuthSms({
                 phone: normalizedPhone,
-                purpose: 'register',
+                purpose: 'auth',
             });
             if (!result.challengeId) {
                 throw new AuthInputError('验证码发送失败，请稍后重试。');
@@ -214,7 +212,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
     };
 
-    const handlePhoneRegister = async (event: React.FormEvent<HTMLFormElement>) => {
+    const handleSmsAuth = async (event: React.FormEvent<HTMLFormElement>) => {
         event.preventDefault();
         if (loading || smsLoading) return;
 
@@ -225,28 +223,19 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             if (!/^\d{6}$/.test(smsCode.trim())) {
                 throw new AuthInputError('请输入 6 位短信验证码。');
             }
-            if (passwordLength(password) < 10 || passwordLength(password) > 128) {
-                throw new AuthInputError('请输入 10-128 位密码。');
-            }
-            if (password !== confirmPassword) {
-                throw new AuthInputError('两次输入的密码不一致。');
-            }
             setLoading(true);
-            await onPhoneRegister({
+            await onSmsAuth({
                 challengeId,
                 phone: normalizedPhone,
                 code: smsCode.trim(),
-                password,
             });
-            setPassword('');
-            setConfirmPassword('');
             setSmsCode('');
             setChallengeId(null);
             setSmsCountdown(0);
         } catch (error) {
             const message = error instanceof AuthInputError
                 ? error.message
-                : registerErrorMessage(error);
+                : smsAuthErrorMessage(error);
             setAuthError(message);
         } finally {
             setLoading(false);
@@ -287,11 +276,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                     <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl border border-amber-500/20 bg-amber-500/10">
                         <KeyRound size={23} className="text-amber-400" />
                     </div>
-                    <h2 className="text-xl font-bold text-white">{mode === 'register' ? '注册人生 K 线' : '登录人生 K 线'}</h2>
+                    <h2 className="text-xl font-bold text-white">{mode === 'password' ? '密码登录' : '手机号登录'}</h2>
                     <p className="mt-2 text-xs leading-5 text-slate-400">
-                        {mode === 'register'
-                            ? '使用手机号创建账号，随后补全你的个人档案。'
-                            : '登录后同步你的个人档案、会员状态与历史数据。'}
+                        {mode === 'password'
+                            ? '使用已设置的登录密码进入账号。'
+                            : '输入验证码即可登录；新手机号会自动创建账号。'}
                     </p>
                 </div>
 
@@ -329,23 +318,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                             )}
                         </div>
                     ) : (
-                        <form onSubmit={mode === 'register' ? handlePhoneRegister : handlePasswordLogin} className="space-y-4">
-                            <div className="grid grid-cols-2 rounded-xl border border-white/10 bg-white/[0.03] p-1">
-                                {(['login', 'register'] as AuthMode[]).map((item) => (
-                                    <button
-                                        key={item}
-                                        type="button"
-                                        disabled={loading || smsLoading}
-                                        onClick={() => switchMode(item)}
-                                        className={`rounded-lg py-2 text-xs font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-                                            mode === item ? 'bg-white text-black' : 'text-slate-500 hover:text-white'
-                                        }`}
-                                    >
-                                        {item === 'login' ? '登录' : '注册'}
-                                    </button>
-                                ))}
-                            </div>
-
+                        <form onSubmit={mode === 'sms' ? handleSmsAuth : handlePasswordLogin} className="space-y-4">
                             <div>
                                 <label htmlFor="auth-phone" className="mb-2 block text-xs font-medium text-slate-300">手机号</label>
                                 <div className="flex rounded-xl border border-white/10 bg-[#101010] transition-colors focus-within:border-amber-500/45">
@@ -375,7 +348,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                                 </div>
                             </div>
 
-                            {mode === 'register' && (
+                            {mode === 'sms' && (
                                 <div>
                                     <label htmlFor="auth-sms-code" className="mb-2 block text-xs font-medium text-slate-300">短信验证码</label>
                                     <div className="flex rounded-xl border border-white/10 bg-[#101010] transition-colors focus-within:border-amber-500/45">
@@ -393,7 +366,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                                         <button
                                             type="button"
                                             disabled={loading || smsLoading || smsCountdown > 0 || !phone.trim()}
-                                            onClick={() => void handleSendRegistrationSms()}
+                                            onClick={() => void handleSendAuthSms()}
                                             className="mr-2 self-center rounded-lg border border-white/10 px-3 py-2 text-[11px] font-bold text-amber-200 transition-colors hover:border-amber-400/40 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:text-slate-600 disabled:hover:border-white/10 disabled:hover:bg-transparent"
                                         >
                                             {smsLoading ? '发送中' : smsCountdown > 0 ? `${smsCountdown}s` : '获取验证码'}
@@ -402,6 +375,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                                 </div>
                             )}
 
+                            {mode === 'password' && (
                             <div>
                                 <label htmlFor="auth-password" className="mb-2 block text-xs font-medium text-slate-300">密码</label>
                                 <div className="flex items-center rounded-xl border border-white/10 bg-[#101010] transition-colors focus-within:border-amber-500/45">
@@ -409,10 +383,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                                     <input
                                         id="auth-password"
                                         type={showPassword ? 'text' : 'password'}
-                                        autoComplete={mode === 'register' ? 'new-password' : 'current-password'}
+                                        autoComplete="current-password"
                                         value={password}
                                         onChange={(event) => setPassword(event.target.value)}
-                                        placeholder={mode === 'register' ? '设置 10-128 位密码' : '请输入密码'}
+                                        placeholder="请输入密码"
                                         disabled={loading}
                                         className="min-w-0 flex-1 bg-transparent px-3 py-3.5 text-sm text-white outline-none placeholder:text-slate-600 disabled:opacity-60"
                                     />
@@ -426,32 +400,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                                     </button>
                                 </div>
                             </div>
-
-                            {mode === 'register' && (
-                                <div>
-                                    <label htmlFor="auth-confirm-password" className="mb-2 block text-xs font-medium text-slate-300">确认密码</label>
-                                    <div className="flex items-center rounded-xl border border-white/10 bg-[#101010] transition-colors focus-within:border-amber-500/45">
-                                        <Lock size={17} className="ml-4 shrink-0 text-slate-500" />
-                                        <input
-                                            id="auth-confirm-password"
-                                            type={showConfirmPassword ? 'text' : 'password'}
-                                            autoComplete="new-password"
-                                            value={confirmPassword}
-                                            onChange={(event) => setConfirmPassword(event.target.value)}
-                                            placeholder="请再次输入密码"
-                                            disabled={loading}
-                                            className="min-w-0 flex-1 bg-transparent px-3 py-3.5 text-sm text-white outline-none placeholder:text-slate-600 disabled:opacity-60"
-                                        />
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowConfirmPassword((current) => !current)}
-                                            aria-label={showConfirmPassword ? '隐藏确认密码' : '显示确认密码'}
-                                            className="mr-2 rounded-lg p-2 text-slate-500 hover:bg-white/5 hover:text-white"
-                                        >
-                                            {showConfirmPassword ? <EyeOff size={17} /> : <Eye size={17} />}
-                                        </button>
-                                    </div>
-                                </div>
                             )}
 
                             {authError && (
@@ -466,8 +414,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                                     loading ||
                                     smsLoading ||
                                     !phone.trim() ||
-                                    !password ||
-                                    (mode === 'register' && (!confirmPassword || !smsCode || !challengeId))
+                                    (mode === 'password' ? !password : (!smsCode || !challengeId))
                                 }
                                 className="flex w-full items-center justify-center gap-2 rounded-xl bg-white py-3.5 text-sm font-bold text-black transition-all hover:bg-amber-50 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-40"
                             >
@@ -475,16 +422,21 @@ export const AuthModal: React.FC<AuthModalProps> = ({
                                     <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/25 border-t-black" />
                                 ) : (
                                     <>
-                                        {mode === 'register' ? '注册' : '登录'}
+                                        {mode === 'password' ? '登录' : '登录 / 注册'}
                                         <ChevronRight size={17} />
                                     </>
                                 )}
                             </button>
 
                             <div className="grid grid-cols-2 gap-2 pt-2">
-                                <button type="button" disabled className="flex cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-2 py-2.5 text-[11px] text-slate-600">
-                                    <Smartphone size={14} />
-                                    验证码登录 · 暂未开放
+                                <button
+                                    type="button"
+                                    disabled={loading || smsLoading}
+                                    onClick={() => switchMode(mode === 'password' ? 'sms' : 'password')}
+                                    className="flex items-center justify-center gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-2 py-2.5 text-[11px] text-slate-300 transition-colors hover:border-white/15 hover:bg-white/[0.05] disabled:cursor-not-allowed disabled:text-slate-600"
+                                >
+                                    {mode === 'password' ? <Smartphone size={14} /> : <Lock size={14} />}
+                                    {mode === 'password' ? '验证码登录 / 注册' : '使用密码登录'}
                                 </button>
                                 <button type="button" disabled className="flex cursor-not-allowed items-center justify-center gap-2 rounded-lg border border-white/5 bg-white/[0.02] px-2 py-2.5 text-[11px] text-slate-600">
                                     <Mail size={14} />
@@ -497,7 +449,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
                 <div className="flex items-center justify-center gap-2 border-t border-white/5 bg-[#070707] p-4 text-[9px] text-slate-600">
                     <ShieldCheck size={11} />
-                    密码仅通过加密连接提交，不会存储在浏览器中
+                    验证码和密码仅通过加密连接提交，不会存储在浏览器中
                 </div>
             </div>
         </div>

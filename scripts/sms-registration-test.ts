@@ -89,8 +89,8 @@ const main = async () => {
   const database = ensureLocalTestDatabase();
   const config = getBackendConfig();
   const startedAt = new Date().toISOString();
-  const seed = randomInt(10_000_000, 89_999_000);
-  const phone = (offset: number) => `+1555${seed + offset}`;
+  const seed = randomInt(100_000_000, 899_999_000);
+  const phone = (offset: number) => `+8613${seed + offset}`;
   const device = (offset: number) => `sms-device-${seed + offset}`;
   const password = (label: string) => `Sms-${label}-${randomUUID()}!`;
   const mockCode = config.smsMockCode;

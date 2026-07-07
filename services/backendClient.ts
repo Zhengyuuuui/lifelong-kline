@@ -52,6 +52,9 @@ export interface BackendBundle {
   identities?: AuthIdentity[];
   profile?: UserInputProfile | null;
   membership?: Record<string, unknown> | null;
+  accountSecurity?: {
+    hasPassword?: boolean;
+  };
   payment?: Record<string, unknown>;
   generation?: Record<string, unknown>;
   settings?: {
@@ -80,6 +83,12 @@ export interface RegistrationSmsPayload {
   deviceId?: string;
 }
 
+export interface AuthSmsPayload {
+  phone: string;
+  purpose: "auth";
+  deviceId?: string;
+}
+
 export interface RegistrationSmsResult {
   ok: boolean;
   challengeId: string;
@@ -94,14 +103,24 @@ export interface PhoneRegisterPayload {
   password: string;
 }
 
+export interface SmsAuthPayload {
+  challengeId: string;
+  phone: string;
+  code: string;
+}
+
 export interface PasswordChangePayload {
   currentPassword: string;
   newPassword: string;
 }
 
+export interface PasswordSetPayload {
+  newPassword: string;
+}
+
 export interface PasswordChangeResult {
   ok: boolean;
-  refreshTokensRevoked: boolean;
+  refreshTokensRevoked?: boolean;
 }
 
 export interface AiGeneratePayload {
@@ -220,6 +239,28 @@ export const backendClient = {
       }),
     }),
 
+  sendAuthSms: async (payload: AuthSmsPayload) =>
+    apiJson<RegistrationSmsResult>("/api/auth/sms/send", {
+      method: "POST",
+      body: JSON.stringify({
+        phone: payload.phone,
+        purpose: "auth",
+        deviceId: payload.deviceId || getClientInstallationId(),
+      }),
+    }),
+
+  verifySmsAuth: async (payload: SmsAuthPayload) =>
+    persistToken(
+      await apiJson<BackendBundle>("/api/auth/sms/verify", {
+        method: "POST",
+        body: JSON.stringify({
+          challengeId: payload.challengeId,
+          phone: payload.phone,
+          code: payload.code,
+        }),
+      })
+    ),
+
   registerWithPhone: async (payload: PhoneRegisterPayload) =>
     persistToken(
       await apiJson<BackendBundle>("/api/auth/register/phone", {
@@ -232,6 +273,14 @@ export const backendClient = {
         }),
       })
     ),
+
+  setPassword: async (payload: PasswordSetPayload) =>
+    apiJson<PasswordChangeResult>("/api/auth/password/set", {
+      method: "POST",
+      body: JSON.stringify({
+        newPassword: payload.newPassword,
+      }),
+    }),
 
   changePassword: async (payload: PasswordChangePayload) =>
     apiJson<PasswordChangeResult>("/api/auth/password/change", {

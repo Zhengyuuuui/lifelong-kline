@@ -26,7 +26,7 @@ var import_express8 = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_vite = require("vite");
 var import_dns = __toESM(require("dns"), 1);
-var import_node_crypto12 = __toESM(require("node:crypto"), 1);
+var import_node_crypto13 = __toESM(require("node:crypto"), 1);
 
 // server/aiProvider.ts
 var import_genai = require("@google/genai");
@@ -1095,6 +1095,27 @@ var getBackendConfig = () => {
     smsSendIpLimit: boundedIntEnv("SMS_SEND_IP_LIMIT", process.env.SMS_SEND_IP_LIMIT, 20, 1, 1e3),
     smsSendPhoneLimit: boundedIntEnv("SMS_SEND_PHONE_LIMIT", process.env.SMS_SEND_PHONE_LIMIT, 5, 1, 200),
     smsSendDeviceLimit: boundedIntEnv("SMS_SEND_DEVICE_LIMIT", process.env.SMS_SEND_DEVICE_LIMIT, 10, 1, 500),
+    smsAuthRegisterIpDailyLimit: boundedIntEnv(
+      "SMS_AUTH_REGISTER_IP_DAILY_LIMIT",
+      process.env.SMS_AUTH_REGISTER_IP_DAILY_LIMIT,
+      20,
+      1,
+      1e4
+    ),
+    smsAuthRegisterDeviceDailyLimit: boundedIntEnv(
+      "SMS_AUTH_REGISTER_DEVICE_DAILY_LIMIT",
+      process.env.SMS_AUTH_REGISTER_DEVICE_DAILY_LIMIT,
+      5,
+      1,
+      1e4
+    ),
+    smsAuthRegisterPhoneDailyLimit: boundedIntEnv(
+      "SMS_AUTH_REGISTER_PHONE_DAILY_LIMIT",
+      process.env.SMS_AUTH_REGISTER_PHONE_DAILY_LIMIT,
+      1,
+      1,
+      100
+    ),
     smsMockCode,
     tencentCloudSecretId: requireTencentSmsValue(
       "TENCENTCLOUD_SECRET_ID",
@@ -1271,6 +1292,13 @@ var normalizeE164Phone = (value) => {
   }
   return normalized;
 };
+var normalizeMainlandChinaPhone = (value) => {
+  const normalized = normalizeE164Phone(value);
+  if (!/^\+861[3-9]\d{9}$/.test(normalized)) {
+    throw new ValidationError({ phone: "Unsupported phone region" });
+  }
+  return normalized;
+};
 var sha256Base64Url = (value) => (0, import_node_crypto2.createHash)("sha256").update(value).digest("base64url");
 var validateAppleLoginPayload = (body) => {
   if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
@@ -1318,6 +1346,12 @@ var validatePasswordChangePayload = (body) => {
     newPassword: validateCredentialPassword(passwordValue(body.newPassword), "newPassword")
   };
 };
+var validatePasswordSetPayload = (body) => {
+  if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
+  return {
+    newPassword: validateCredentialPassword(passwordValue(body.newPassword), "newPassword")
+  };
+};
 var normalizeDeviceId = (value) => {
   const deviceId = str(value, 128);
   if (!DEVICE_ID_RE.test(deviceId)) {
@@ -1329,12 +1363,26 @@ var validateSmsSendPayload = (body) => {
   if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
   const purpose = str(body.purpose, 32);
   const details = {};
-  if (purpose !== "register") details.purpose = "Unsupported SMS purpose";
+  if (!["register", "auth"].includes(purpose)) details.purpose = "Unsupported SMS purpose";
   if (Object.keys(details).length) throw new ValidationError(details);
   return {
-    phone: normalizeE164Phone(body.phone),
+    phone: normalizeMainlandChinaPhone(body.phone),
     purpose,
     deviceId: normalizeDeviceId(body.deviceId)
+  };
+};
+var validateSmsVerifyPayload = (body) => {
+  if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
+  const challengeId = str(body.challengeId, 64);
+  const code = str(body.code, 16);
+  const details = {};
+  if (!UUID_RE.test(challengeId)) details.challengeId = "Expected challenge UUID";
+  if (!/^\d{6}$/.test(code)) details.code = "Expected 6-digit verification code";
+  if (Object.keys(details).length) throw new ValidationError(details);
+  return {
+    challengeId,
+    phone: normalizeMainlandChinaPhone(body.phone),
+    code
   };
 };
 var validatePhoneRegisterPayload = (body) => {
@@ -3280,6 +3328,50 @@ var PasswordService = class {
     if (outcome.failure) throw new HttpError(401, INVALID_CREDENTIALS_MESSAGE);
     return { ok: true, refreshTokensRevoked: true };
   }
+  async setPassword(userId, newPassword, meta) {
+    await withTransaction(async (client) => {
+      const userResult = await client.query(
+        `
+          SELECT id
+          FROM users
+          WHERE id = $1 AND status = 'active' AND deleted_at IS NULL
+          FOR UPDATE
+        `,
+        [userId]
+      );
+      if (!userResult.rows[0]) throw new HttpError(401, "User is not active");
+      const existingCredential = await client.query(
+        "SELECT user_id FROM password_credentials WHERE user_id = $1 FOR UPDATE",
+        [userId]
+      );
+      if (existingCredential.rows[0]) {
+        throw new HttpError(409, "Password already exists; use changePassword");
+      }
+      await client.query(
+        `
+          INSERT INTO password_credentials (
+            user_id,
+            password_hash,
+            algorithm,
+            algorithm_version,
+            password_changed_at
+          )
+          VALUES ($1, $2, $3, $4, now())
+        `,
+        [
+          userId,
+          await hashPasswordCredential(newPassword),
+          PASSWORD_ALGORITHM,
+          PASSWORD_ALGORITHM_VERSION
+        ]
+      );
+      await this.audit(client, userId, "auth.password.set_success", {
+        algorithm: PASSWORD_ALGORITHM,
+        algorithmVersion: PASSWORD_ALGORITHM_VERSION
+      }, meta);
+    });
+    return { ok: true };
+  }
   async provisionLocalTestPhoneUser(input) {
     assertLocalProvisioning();
     const normalizedPhone = normalizeE164Phone(input.phone);
@@ -3722,11 +3814,18 @@ var SmsService = class {
 };
 
 // server/postgres/registration.service.ts
+var import_node_crypto8 = require("node:crypto");
 var normalizeIp5 = (value) => {
   if (!value) return null;
   const first = value.split(",")[0]?.trim();
   return first || null;
 };
+var hmacHex2 = (domain, value) => {
+  const config = getBackendConfig();
+  const secret = config.smsCodeHmacSecret || config.jwtAccessSecret;
+  return (0, import_node_crypto8.createHmac)("sha256", secret).update(`${domain}:${value}`).digest("hex");
+};
+var dayWindowSql = "date_trunc('day', now())";
 var RegistrationService = class {
   constructor() {
     this.authService = new AuthService();
@@ -3835,6 +3934,15 @@ var RegistrationService = class {
         }, meta);
         return { error: new HttpError(409, "\u624B\u673A\u53F7\u5DF2\u6CE8\u518C\uFF0C\u8BF7\u76F4\u63A5\u767B\u5F55") };
       }
+      const registrationLimit = await this.checkAutoRegisterDailyLimits(
+        client,
+        challenge,
+        phoneHash,
+        meta
+      );
+      if (registrationLimit.limited) {
+        return { error: new HttpError(429, "Too many registration attempts") };
+      }
       const user = await client.query(
         `
           INSERT INTO users (auth_provider, phone, display_name, last_login_at)
@@ -3891,6 +3999,187 @@ var RegistrationService = class {
     if ("error" in outcome) throw outcome.error;
     return outcome.response;
   }
+  async verifyPhoneAuth(payload, meta) {
+    const normalizedPhone = normalizeMainlandChinaPhone(payload.phone);
+    const phoneHash = hashSmsPhoneIdentifier(normalizedPhone);
+    const outcome = await withTransaction(async (client) => {
+      const challenge = await this.getLockedChallenge(client, payload.challengeId);
+      if (!challenge) {
+        await this.audit(client, null, "sms_auth.verify_failed", {
+          challengeId: payload.challengeId,
+          phoneHash,
+          reason: "challenge_not_found"
+        }, meta);
+        return { error: new HttpError(422, "\u9A8C\u8BC1\u7801\u9519\u8BEF") };
+      }
+      if (challenge.purpose !== "auth" || challenge.phone_hash !== phoneHash) {
+        await this.audit(client, null, "sms_auth.verify_failed", {
+          challengeId: challenge.id,
+          phoneHash,
+          reason: "challenge_mismatch"
+        }, meta);
+        return { error: new HttpError(422, "\u9A8C\u8BC1\u7801\u9519\u8BEF") };
+      }
+      if (challenge.send_status !== "sent") {
+        await this.audit(client, null, "sms_auth.verify_failed", {
+          challengeId: challenge.id,
+          phoneHash,
+          reason: "challenge_not_sent"
+        }, meta);
+        return { error: new HttpError(409, "\u9A8C\u8BC1\u7801\u5C1A\u672A\u53D1\u9001\u6210\u529F") };
+      }
+      if (challenge.consumed_at) {
+        await this.audit(client, null, "sms_auth.verify_failed", {
+          challengeId: challenge.id,
+          phoneHash,
+          reason: "challenge_consumed"
+        }, meta);
+        return { error: new HttpError(409, "\u9A8C\u8BC1\u7801\u5DF2\u4F7F\u7528") };
+      }
+      if (Date.parse(challenge.expires_at) <= Date.now()) {
+        await this.audit(client, null, "sms_auth.verify_failed", {
+          challengeId: challenge.id,
+          phoneHash,
+          reason: "challenge_expired"
+        }, meta);
+        return { error: new HttpError(410, "\u9A8C\u8BC1\u7801\u5DF2\u8FC7\u671F") };
+      }
+      if (challenge.attempt_count >= challenge.max_attempts) {
+        await this.audit(client, null, "sms_auth.verify_failed", {
+          challengeId: challenge.id,
+          phoneHash,
+          reason: "attempts_exhausted"
+        }, meta);
+        return { error: new HttpError(429, "\u9A8C\u8BC1\u7801\u5C1D\u8BD5\u6B21\u6570\u8FC7\u591A") };
+      }
+      const validCode = verifySmsCodeHash(
+        challenge.id,
+        challenge.purpose,
+        challenge.phone_hash,
+        payload.code,
+        challenge.code_hash
+      );
+      if (!validCode) {
+        const attempts = challenge.attempt_count + 1;
+        await client.query(
+          "UPDATE auth_challenges SET attempt_count = $2 WHERE id = $1",
+          [challenge.id, attempts]
+        );
+        await this.audit(client, null, "sms_auth.verify_failed", {
+          challengeId: challenge.id,
+          phoneHash,
+          reason: attempts >= challenge.max_attempts ? "attempts_exhausted" : "invalid_code",
+          attemptCount: attempts
+        }, meta);
+        return {
+          error: new HttpError(
+            attempts >= challenge.max_attempts ? 429 : 422,
+            attempts >= challenge.max_attempts ? "\u9A8C\u8BC1\u7801\u5C1D\u8BD5\u6B21\u6570\u8FC7\u591A" : "\u9A8C\u8BC1\u7801\u9519\u8BEF"
+          )
+        };
+      }
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        [`phone:${normalizedPhone}`]
+      );
+      const existingIdentity = await client.query(
+        `
+          SELECT
+            identity.id AS identity_id,
+            identity.user_id,
+            identity.status AS identity_status,
+            identity.revoked_at::text AS identity_revoked_at,
+            identity.verified_at::text AS identity_verified_at,
+            user_account.status AS user_status,
+            user_account.deleted_at::text AS user_deleted_at
+          FROM user_auth_identities identity
+          JOIN users user_account ON user_account.id = identity.user_id
+          WHERE identity.provider = 'phone' AND identity.provider_subject = $1
+          LIMIT 1
+          FOR UPDATE OF identity, user_account
+        `,
+        [normalizedPhone]
+      );
+      const identity = existingIdentity.rows[0];
+      if (identity && (identity.identity_status !== "active" || identity.identity_revoked_at || !identity.identity_verified_at || identity.user_status !== "active" || identity.user_deleted_at)) {
+        await client.query(
+          "UPDATE auth_challenges SET consumed_at = now() WHERE id = $1",
+          [challenge.id]
+        );
+        await this.audit(client, identity.user_id, "sms_auth.verify_failed", {
+          challengeId: challenge.id,
+          phoneHash,
+          reason: "identity_unavailable"
+        }, meta);
+        return { error: new HttpError(403, "\u5F53\u524D\u624B\u673A\u53F7\u4E0D\u53EF\u767B\u5F55") };
+      }
+      let userId = identity?.user_id;
+      const createdUser = !userId;
+      if (!userId) {
+        const registrationLimit = await this.checkAutoRegisterDailyLimits(
+          client,
+          challenge,
+          phoneHash,
+          meta
+        );
+        if (registrationLimit.limited) {
+          return { error: new HttpError(429, "Too many registration attempts") };
+        }
+        const user = await client.query(
+          `
+            INSERT INTO users (auth_provider, phone, display_name, last_login_at)
+            VALUES ('phone', $1, '\u624B\u673A\u7528\u6237', now())
+            RETURNING id
+          `,
+          [normalizedPhone]
+        );
+        userId = user.rows[0].id;
+      } else {
+        await client.query(
+          `
+            UPDATE users
+            SET phone = COALESCE(phone, $2), last_login_at = now(), updated_at = now()
+            WHERE id = $1
+          `,
+          [userId, normalizedPhone]
+        );
+      }
+      await this.authService.bindVerifiedIdentity(
+        userId,
+        {
+          provider: "phone",
+          providerSubject: normalizedPhone,
+          verifiedAt: (/* @__PURE__ */ new Date()).toISOString(),
+          verificationSource: "sms_verification",
+          phone: normalizedPhone,
+          rawClaims: {
+            challengeId: challenge.id,
+            purpose: challenge.purpose,
+            phoneHash
+          }
+        },
+        meta,
+        client
+      );
+      await client.query(
+        "UPDATE auth_challenges SET consumed_at = now() WHERE id = $1",
+        [challenge.id]
+      );
+      await this.audit(
+        client,
+        userId,
+        createdUser ? "sms_auth.register_success" : "sms_auth.login_success",
+        {
+          challengeId: challenge.id,
+          phoneHash
+        },
+        meta
+      );
+      return { response: await this.authService.createSessionForUser(userId, meta, client) };
+    });
+    if ("error" in outcome) throw outcome.error;
+    return outcome.response;
+  }
   async getLockedChallenge(client, challengeId) {
     const result = await client.query(
       `
@@ -3898,6 +4187,7 @@ var RegistrationService = class {
           id,
           purpose,
           phone_hash,
+          device_hash,
           code_hash,
           expires_at::text,
           attempt_count,
@@ -3911,6 +4201,51 @@ var RegistrationService = class {
       [challengeId]
     );
     return result.rows[0];
+  }
+  async checkAutoRegisterDailyLimits(client, challenge, phoneHash, meta) {
+    const config = getBackendConfig();
+    if (!config.pgRateLimitEnabled) return { limited: false };
+    const checks = [
+      {
+        type: "ip",
+        limit: config.smsAuthRegisterIpDailyLimit,
+        bucketKey: `sms-auth-register-ip:${hmacHex2("sms-auth-register-ip:v1", normalizeIp5(meta.ipAddress) || "unknown")}`
+      },
+      {
+        type: "device",
+        limit: config.smsAuthRegisterDeviceDailyLimit,
+        bucketKey: `sms-auth-register-device:${challenge.device_hash}`
+      },
+      {
+        type: "phone",
+        limit: config.smsAuthRegisterPhoneDailyLimit,
+        bucketKey: `sms-auth-register-phone:${phoneHash}`
+      }
+    ];
+    for (const check of checks) {
+      const result = await client.query(
+        `
+          INSERT INTO api_rate_limits (bucket_key, route_key, window_start, request_count)
+          VALUES ($1, $2, ${dayWindowSql}, 1)
+          ON CONFLICT (bucket_key, route_key, window_start)
+          DO UPDATE SET request_count = api_rate_limits.request_count + 1
+          RETURNING request_count
+        `,
+        [check.bucketKey, "auth.sms.auto_register.daily"]
+      );
+      const count = Number(result.rows[0]?.request_count || 0);
+      if (count > check.limit) {
+        await this.audit(client, null, "sms_auth.register_rate_limited", {
+          challengeId: challenge.id,
+          phoneHash,
+          deviceHash: challenge.device_hash,
+          ipBucketHash: hmacHex2("sms-auth-register-ip-bucket:v1", check.bucketKey),
+          limitType: check.type
+        }, meta);
+        return { limited: true, limitType: check.type };
+      }
+    }
+    return { limited: false };
   }
   async audit(client, userId, eventType, metadata, meta) {
     await client.query(
@@ -3998,6 +4333,31 @@ var createAuthRouter = () => {
     })
   );
   router.post(
+    "/sms/verify",
+    createPostgresRateLimiter({
+      routeKey: "auth.sms.verify.ip",
+      limit: 60,
+      windowMs: 15 * 6e4
+    }),
+    createPostgresRateLimiter({
+      routeKey: "auth.sms.verify.phone",
+      limit: 20,
+      windowMs: 15 * 6e4,
+      bucketKey: (req) => smsPhoneRateLimitBucket(req.body?.phone),
+      onRateLimited: (req, context) => smsService.auditRateLimited(
+        "sms_verify_phone",
+        context.bucketKey,
+        getRequestMeta(req),
+        { routeKey: context.routeKey }
+      )
+    }),
+    asyncHandler(async (req, res) => {
+      const payload = validateSmsVerifyPayload(req.body);
+      const result = await registrationService.verifyPhoneAuth(payload, getRequestMeta(req));
+      res.json(result);
+    })
+  );
+  router.post(
     "/password/login",
     createPostgresRateLimiter({
       routeKey: "auth.password.login.ip",
@@ -4015,6 +4375,24 @@ var createAuthRouter = () => {
       const result = await passwordService.login(
         payload.phone,
         payload.password,
+        getRequestMeta(req)
+      );
+      res.json(result);
+    })
+  );
+  router.post(
+    "/password/set",
+    requirePostgresAuth,
+    createPostgresRateLimiter({
+      routeKey: "auth.password.set",
+      limit: 10,
+      windowMs: 60 * 6e4
+    }),
+    asyncHandler(async (req, res) => {
+      const payload = validatePasswordSetPayload(req.body);
+      const result = await passwordService.setPassword(
+        req.pgAuth.userId,
+        payload.newPassword,
         getRequestMeta(req)
       );
       res.json(result);
@@ -4119,10 +4497,10 @@ var createPostgresHealthRouter = () => {
 var import_express4 = require("express");
 
 // server/postgres/payment.service.ts
-var import_node_crypto8 = require("node:crypto");
+var import_node_crypto9 = require("node:crypto");
 var import_node_fs2 = require("node:fs");
 var import_app_store_server_library = require("@apple/app-store-server-library");
-var sha256Hex2 = (value) => (0, import_node_crypto8.createHash)("sha256").update(value).digest("hex");
+var sha256Hex2 = (value) => (0, import_node_crypto9.createHash)("sha256").update(value).digest("hex");
 var json = (value) => JSON.stringify(value ?? {});
 var parsePemCertificates = (content) => {
   const text = Buffer.isBuffer(content) ? content.toString("utf8") : content;
@@ -4398,7 +4776,7 @@ var PaymentService = class {
     const productId = payload.productId || config.appleIapProductIds[0] || "com.lifekline.lifetime";
     const purchase = {
       productId,
-      transactionId: payload.transactionId || `mock_${(0, import_node_crypto8.randomUUID)()}`,
+      transactionId: payload.transactionId || `mock_${(0, import_node_crypto9.randomUUID)()}`,
       originalTransactionId: null,
       purchaseDate: (/* @__PURE__ */ new Date()).toISOString(),
       expiresAt: productId.toLowerCase().includes("month") ? new Date(Date.now() + 31 * 24 * 60 * 60 * 1e3).toISOString() : null,
@@ -4720,10 +5098,11 @@ var mapPreferences = (row) => {
 var UserService = class {
   async getMe(userId) {
     const user = await this.getUser(userId);
-    const [profile, membership, preferences] = await Promise.all([
+    const [profile, membership, preferences, accountSecurity] = await Promise.all([
       this.getProfile(userId),
       this.getActiveMembership(userId),
-      this.getPreferences(userId)
+      this.getPreferences(userId),
+      this.getAccountSecurity(userId)
     ]);
     return {
       ok: true,
@@ -4731,7 +5110,24 @@ var UserService = class {
       user: mapUser2(user),
       profile: mapProfile2(profile || void 0),
       membership: mapMembership3(membership || void 0),
-      settings: mapPreferences(preferences || void 0)
+      settings: mapPreferences(preferences || void 0),
+      accountSecurity
+    };
+  }
+  async getAccountSecurity(userId) {
+    await this.getUser(userId);
+    const result = await query(
+      `
+        SELECT EXISTS (
+          SELECT 1
+          FROM password_credentials
+          WHERE user_id = $1
+        ) AS has_password
+      `,
+      [userId]
+    );
+    return {
+      hasPassword: result.rows[0]?.has_password === true
     };
   }
   async getProfile(userId) {
@@ -5080,10 +5476,10 @@ var createUserRouter = () => {
 var import_express6 = require("express");
 
 // server/postgres/appleWebhook.service.ts
-var import_node_crypto9 = require("node:crypto");
+var import_node_crypto10 = require("node:crypto");
 var import_node_fs3 = require("node:fs");
 var import_app_store_server_library2 = require("@apple/app-store-server-library");
-var sha256Hex3 = (value) => (0, import_node_crypto9.createHash)("sha256").update(value).digest("hex");
+var sha256Hex3 = (value) => (0, import_node_crypto10.createHash)("sha256").update(value).digest("hex");
 var json2 = (value) => JSON.stringify(value ?? {});
 var toIso = (value) => {
   if (!value || !Number.isFinite(value)) return null;
@@ -5455,10 +5851,10 @@ var createWebhookRouter = () => {
 var import_express7 = __toESM(require("express"), 1);
 
 // server/postgres/xunhupay.service.ts
-var import_node_crypto11 = require("node:crypto");
+var import_node_crypto12 = require("node:crypto");
 
 // server/postgres/xunhupay.sign.ts
-var import_node_crypto10 = require("node:crypto");
+var import_node_crypto11 = require("node:crypto");
 var HASH_RE = /^[a-f0-9]{32}$/;
 var TOTAL_FEE_RE = /^(0|[1-9]\d{0,13})\.\d{2}$/;
 var normalizeValue = (value) => {
@@ -5494,7 +5890,7 @@ var totalFeeToAmountCents = (totalFee) => {
 };
 var buildXunhuHash = (payload, appSecret) => {
   if (!appSecret) throw new Error("Xunhupay app secret is required");
-  return (0, import_node_crypto10.createHash)("md5").update(`${canonicalizeXunhuPayload(payload)}${appSecret}`).digest("hex");
+  return (0, import_node_crypto11.createHash)("md5").update(`${canonicalizeXunhuPayload(payload)}${appSecret}`).digest("hex");
 };
 var verifyXunhuHash = (payload, appSecret) => {
   const receivedHash = normalizeValue(payload.hash).toLowerCase();
@@ -5502,9 +5898,9 @@ var verifyXunhuHash = (payload, appSecret) => {
   const expectedHash = buildXunhuHash(payload, appSecret);
   const received = Buffer.from(receivedHash, "utf8");
   const expected = Buffer.from(expectedHash, "utf8");
-  return received.length === expected.length && (0, import_node_crypto10.timingSafeEqual)(received, expected);
+  return received.length === expected.length && (0, import_node_crypto11.timingSafeEqual)(received, expected);
 };
-var createNonceStr = () => (0, import_node_crypto10.randomBytes)(16).toString("hex");
+var createNonceStr = () => (0, import_node_crypto11.randomBytes)(16).toString("hex");
 var createMerchantOrderNo = () => {
   const now = /* @__PURE__ */ new Date();
   const stamp = [
@@ -5516,7 +5912,7 @@ var createMerchantOrderNo = () => {
     String(now.getSeconds()).padStart(2, "0"),
     String(now.getMilliseconds()).padStart(3, "0")
   ].join("");
-  return `LK${stamp}${(0, import_node_crypto10.randomUUID)().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+  return `LK${stamp}${(0, import_node_crypto11.randomUUID)().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
 };
 
 // server/postgres/xunhupay.service.ts
@@ -5550,7 +5946,7 @@ var payloadHash = (payload) => {
     acc[key] = payload[key];
     return acc;
   }, {});
-  return (0, import_node_crypto11.createHash)("sha256").update(json3(normalized)).digest("hex");
+  return (0, import_node_crypto12.createHash)("sha256").update(json3(normalized)).digest("hex");
 };
 var str2 = (value, max = 255) => String(value ?? "").trim().slice(0, max);
 var productFor = (productId) => PRODUCTS.find((product) => product.productId === productId || product.aliases.includes(productId));
@@ -6206,7 +6602,7 @@ async function startServer() {
     const startedAt = Date.now();
     const { model, contents, config } = req.body;
     const primaryModel = model || "gemini-3.5-flash";
-    const promptHash = import_node_crypto12.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
+    const promptHash = import_node_crypto13.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
     if (!isAiProviderConfigured(aiProviderConfig)) {
       database.logAiRequest({
         userId: getAuthUserId(req) ?? null,
@@ -6296,7 +6692,7 @@ async function startServer() {
     const startedAt = Date.now();
     const { model, contents, config } = req.body;
     const primaryModel = model || "gemini-3.5-flash";
-    const promptHash = import_node_crypto12.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
+    const promptHash = import_node_crypto13.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
     if (!isAiProviderConfigured(aiProviderConfig)) {
       database.logAiRequest({
         userId: getAuthUserId(req) ?? null,

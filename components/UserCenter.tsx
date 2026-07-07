@@ -19,8 +19,11 @@ interface UserCenterProps {
   userProfile?: UserInputProfile;
   user?: BackendUser;
   identities?: AuthIdentity[];
+  accountSecurity?: {
+    hasPassword?: boolean;
+  };
   onLogout?: () => void;
-  onPasswordChanged?: () => void;
+  onPasswordChanged?: (action: 'set' | 'change') => void | Promise<void>;
   isPremium: boolean;
   onRequirePayment: () => void;
   membershipOnly?: boolean;
@@ -33,7 +36,7 @@ interface UserCenterProps {
 type TabKey = 'profile' | 'membership' | 'security' | 'settings';
 
 export const UserCenter: React.FC<UserCenterProps> = ({ 
-  isOpen, onClose, userProfile, user, identities = [], onLogout, onPasswordChanged, isPremium, onRequirePayment, membershipOnly = false, insight, loading, onAnalyze, onShowInsight
+  isOpen, onClose, userProfile, user, identities = [], accountSecurity, onLogout, onPasswordChanged, isPremium, onRequirePayment, membershipOnly = false, insight, loading, onAnalyze, onShowInsight
 }) => {
   const [activeTab, setActiveTab] = useState<TabKey>('membership');
   const [copied, setCopied] = useState(false);
@@ -101,14 +104,15 @@ export const UserCenter: React.FC<UserCenterProps> = ({
       }
   };
 
-  const handleChangePassword = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handlePasswordSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       if (passwordChanging) return;
 
       setPasswordError(null);
+      const hasPasswordCredential = accountSecurity?.hasPassword === true;
       const currentLength = Array.from(currentPassword).length;
       const nextLength = Array.from(newPassword).length;
-      if (currentLength < 10 || currentLength > 128 || nextLength < 10 || nextLength > 128) {
+      if ((hasPasswordCredential && (currentLength < 10 || currentLength > 128)) || nextLength < 10 || nextLength > 128) {
           setPasswordError('密码长度必须为 10-128 位。');
           return;
       }
@@ -116,30 +120,36 @@ export const UserCenter: React.FC<UserCenterProps> = ({
           setPasswordError('两次输入的新密码不一致。');
           return;
       }
-      if (newPassword === currentPassword) {
+      if (hasPasswordCredential && newPassword === currentPassword) {
           setPasswordError('新密码不能与当前密码相同。');
           return;
       }
 
       setPasswordChanging(true);
       try {
-          const result = await backendClient.changePassword({ currentPassword, newPassword });
-          if (!result.ok || !result.refreshTokensRevoked) {
+          const result = hasPasswordCredential
+            ? await backendClient.changePassword({ currentPassword, newPassword })
+            : await backendClient.setPassword({ newPassword });
+          if (!result.ok || (hasPasswordCredential && !result.refreshTokensRevoked)) {
               throw new Error('Password change contract was not satisfied.');
           }
           setCurrentPassword('');
           setNewPassword('');
           setConfirmPassword('');
-          onPasswordChanged?.();
+          await onPasswordChanged?.(hasPasswordCredential ? 'change' : 'set');
       } catch (error) {
           const status = (error as { status?: number }).status;
           setPasswordError(status === 401
               ? '当前密码不正确，修改失败。'
               : status === 422
                   ? '新密码不符合要求，请更换后重试。'
+                  : status === 409
+                      ? '账号已设置登录密码，请刷新后重试。'
                   : status === 429
                       ? '操作过于频繁，请稍后再试。'
-                      : '密码修改失败，请检查网络后重试。');
+                      : hasPasswordCredential
+                          ? '密码修改失败，请检查网络后重试。'
+                          : '密码设置失败，请检查网络后重试。');
       } finally {
           setPasswordChanging(false);
       }
@@ -387,7 +397,8 @@ export const UserCenter: React.FC<UserCenterProps> = ({
     );
     const phoneIdentity = findIdentity('phone');
     const wechatIdentity = findIdentity('wechat');
-    const hasPasswordCredential = Boolean(phoneIdentity?.verifiedAt);
+    const hasPasswordCredential = accountSecurity?.hasPassword === true;
+    const passwordActionLabel = hasPasswordCredential ? '修改登录密码' : '设置登录密码';
     const items = [
       { label: '手机登录', identity: phoneIdentity, fallback: '未绑定', icon: <Smartphone size={18} /> },
       ...(wechatIdentity ? [{ label: '微信登录', identity: wechatIdentity, fallback: '', icon: <span className="font-serif italic">W</span> }] : []),
@@ -416,71 +427,80 @@ export const UserCenter: React.FC<UserCenterProps> = ({
           ))}
         </div>
 
-        {hasPasswordCredential && (
-          <div className="rounded-3xl border border-white/5 bg-white/[0.02] p-5">
-            <button
-              type="button"
-              onClick={() => {
-                setShowPasswordForm((current) => !current);
-                setPasswordError(null);
-              }}
-              className="flex w-full items-center justify-between text-left"
-            >
-              <span className="flex items-center gap-3 text-sm font-medium text-white/90">
-                <Lock size={17} className="text-white/45" />
-                修改密码
-              </span>
+        <div className="rounded-3xl border border-white/5 bg-white/[0.02] p-5">
+          <button
+            type="button"
+            onClick={() => {
+              setShowPasswordForm((current) => !current);
+              setPasswordError(null);
+            }}
+            className="flex w-full items-center justify-between text-left"
+          >
+            <span className="flex items-center gap-3 text-sm font-medium text-white/90">
+              <Lock size={17} className="text-white/45" />
+              {passwordActionLabel}
+            </span>
+            <span className="flex items-center gap-2">
+              {!hasPasswordCredential && (
+                <span className="rounded border border-amber-400/20 px-2 py-1 text-[10px] text-amber-200/75">
+                  未设置
+                </span>
+              )}
               <ChevronRight size={16} className={`text-white/30 transition-transform ${showPasswordForm ? 'rotate-90' : ''}`} />
-            </button>
+            </span>
+          </button>
 
-            {showPasswordForm && (
-              <form onSubmit={handleChangePassword} className="mt-5 space-y-3 border-t border-white/5 pt-5">
-                {[
-                  { id: 'current-password', label: '当前密码', value: currentPassword, setter: setCurrentPassword, autoComplete: 'current-password' },
-                  { id: 'new-password', label: '新密码', value: newPassword, setter: setNewPassword, autoComplete: 'new-password' },
-                  { id: 'confirm-password', label: '确认新密码', value: confirmPassword, setter: setConfirmPassword, autoComplete: 'new-password' },
-                ].map((field) => (
-                  <label key={field.id} htmlFor={field.id} className="block">
-                    <span className="mb-1.5 block text-[11px] text-white/45">{field.label}</span>
-                    <div className="flex items-center rounded-xl border border-white/10 bg-black/25 focus-within:border-amber-500/35">
-                      <input
-                        id={field.id}
-                        type={showPasswordValues ? 'text' : 'password'}
-                        autoComplete={field.autoComplete}
-                        value={field.value}
-                        disabled={passwordChanging}
-                        onChange={(event) => field.setter(event.target.value)}
-                        className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPasswordValues((current) => !current)}
-                        aria-label={showPasswordValues ? '隐藏密码' : '显示密码'}
-                        className="mr-2 rounded-lg p-2 text-white/35 hover:bg-white/5 hover:text-white"
-                      >
-                        {showPasswordValues ? <EyeOff size={15} /> : <Eye size={15} />}
-                      </button>
-                    </div>
-                  </label>
-                ))}
+          {showPasswordForm && (
+            <form onSubmit={handlePasswordSubmit} className="mt-5 space-y-3 border-t border-white/5 pt-5">
+              {[
+                ...(hasPasswordCredential
+                  ? [{ id: 'current-password', label: '当前密码', value: currentPassword, setter: setCurrentPassword, autoComplete: 'current-password' }]
+                  : []),
+                { id: 'new-password', label: hasPasswordCredential ? '新密码' : '登录密码', value: newPassword, setter: setNewPassword, autoComplete: 'new-password' },
+                { id: 'confirm-password', label: hasPasswordCredential ? '确认新密码' : '确认登录密码', value: confirmPassword, setter: setConfirmPassword, autoComplete: 'new-password' },
+              ].map((field) => (
+                <label key={field.id} htmlFor={field.id} className="block">
+                  <span className="mb-1.5 block text-[11px] text-white/45">{field.label}</span>
+                  <div className="flex items-center rounded-xl border border-white/10 bg-black/25 focus-within:border-amber-500/35">
+                    <input
+                      id={field.id}
+                      type={showPasswordValues ? 'text' : 'password'}
+                      autoComplete={field.autoComplete}
+                      value={field.value}
+                      disabled={passwordChanging}
+                      onChange={(event) => field.setter(event.target.value)}
+                      className="min-w-0 flex-1 bg-transparent px-3 py-3 text-sm text-white outline-none disabled:opacity-50"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPasswordValues((current) => !current)}
+                      aria-label={showPasswordValues ? '隐藏密码' : '显示密码'}
+                      className="mr-2 rounded-lg p-2 text-white/35 hover:bg-white/5 hover:text-white"
+                    >
+                      {showPasswordValues ? <EyeOff size={15} /> : <Eye size={15} />}
+                    </button>
+                  </div>
+                </label>
+              ))}
 
-                {passwordError && (
-                  <p role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-                    {passwordError}
-                  </p>
-                )}
+              {passwordError && (
+                <p role="alert" className="rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
+                  {passwordError}
+                </p>
+              )}
 
-                <button
-                  type="submit"
-                  disabled={passwordChanging || !currentPassword || !newPassword || !confirmPassword}
-                  className="w-full rounded-xl bg-white py-3 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {passwordChanging ? '正在修改...' : '确认修改并重新登录'}
-                </button>
-              </form>
-            )}
-          </div>
-        )}
+              <button
+                type="submit"
+                disabled={passwordChanging || (hasPasswordCredential && !currentPassword) || !newPassword || !confirmPassword}
+                className="w-full rounded-xl bg-white py-3 text-xs font-bold text-black disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {passwordChanging
+                  ? (hasPasswordCredential ? '正在修改...' : '正在设置...')
+                  : (hasPasswordCredential ? '确认修改并重新登录' : '确认设置登录密码')}
+              </button>
+            </form>
+          )}
+        </div>
 
         <button onClick={handleDeleteAccount} className="w-full text-left p-6 rounded-3xl bg-white/[0.01] border border-white/5 hover:border-rose-500/30 transition-all group">
           <p className="text-sm font-medium text-rose-500/80 mb-1 group-hover:text-rose-400">注销账户</p>

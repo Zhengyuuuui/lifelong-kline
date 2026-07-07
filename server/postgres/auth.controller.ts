@@ -6,9 +6,11 @@ import {
   validateAppleLoginPayload,
   validatePhoneRegisterPayload,
   validatePasswordChangePayload,
+  validatePasswordSetPayload,
   validatePasswordLoginPayload,
   validateRefreshPayload,
   validateSmsSendPayload,
+  validateSmsVerifyPayload,
   validateWeChatLoginPayload,
 } from "./validation";
 import { createPostgresRateLimiter } from "./rateLimit.middleware";
@@ -93,6 +95,32 @@ export const createAuthRouter = () => {
   );
 
   router.post(
+    "/sms/verify",
+    createPostgresRateLimiter({
+      routeKey: "auth.sms.verify.ip",
+      limit: 60,
+      windowMs: 15 * 60_000,
+    }),
+    createPostgresRateLimiter({
+      routeKey: "auth.sms.verify.phone",
+      limit: 20,
+      windowMs: 15 * 60_000,
+      bucketKey: (req) => smsPhoneRateLimitBucket(req.body?.phone),
+      onRateLimited: (req, context) => smsService.auditRateLimited(
+        "sms_verify_phone",
+        context.bucketKey,
+        getRequestMeta(req),
+        { routeKey: context.routeKey }
+      ),
+    }),
+    asyncHandler(async (req, res) => {
+      const payload = validateSmsVerifyPayload(req.body);
+      const result = await registrationService.verifyPhoneAuth(payload, getRequestMeta(req));
+      res.json(result);
+    })
+  );
+
+  router.post(
     "/password/login",
     createPostgresRateLimiter({
       routeKey: "auth.password.login.ip",
@@ -110,6 +138,25 @@ export const createAuthRouter = () => {
       const result = await passwordService.login(
         payload.phone,
         payload.password,
+        getRequestMeta(req)
+      );
+      res.json(result);
+    })
+  );
+
+  router.post(
+    "/password/set",
+    requirePostgresAuth,
+    createPostgresRateLimiter({
+      routeKey: "auth.password.set",
+      limit: 10,
+      windowMs: 60 * 60_000,
+    }),
+    asyncHandler(async (req: PgAuthedRequest, res) => {
+      const payload = validatePasswordSetPayload(req.body);
+      const result = await passwordService.setPassword(
+        req.pgAuth!.userId,
+        payload.newPassword,
         getRequestMeta(req)
       );
       res.json(result);
