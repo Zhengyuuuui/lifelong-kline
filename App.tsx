@@ -1433,6 +1433,25 @@ export default function App() {
         )
         : null;
 
+    const authModalOverlay = showAuth
+        ? createPortal(
+            <AuthModal
+                isOpen={showAuth}
+                notice={authNotice}
+                onClose={() => {
+                    setShowAuth(false);
+                    setAuthIntent(null);
+                    setAuthNotice(null);
+                }}
+                onPasswordLogin={handlePasswordLogin}
+                onSendAuthSms={handleSendAuthSms}
+                onSmsAuth={handleSmsAuth}
+                onNativeLoginSuccess={handleNativeAuthSuccess}
+            />,
+            getPaymentPortalHost()
+        )
+        : null;
+
     const NavItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) => (
         <button
             onClick={onClick}
@@ -1453,6 +1472,7 @@ export default function App() {
         {fullscreenBookOverlay}
         {membershipIntroOverlay}
         {paymentModalOverlay}
+        {authModalOverlay}
         <div className="h-[100dvh] bg-[#050505] text-slate-200 font-sans selection:bg-amber-500/30 overflow-hidden relative">
 
             {/* iOS Style Ambient Background */}
@@ -1479,21 +1499,6 @@ export default function App() {
                     onCancel={() => setShowActivation(false)}
                 />
             )}
-
-            {/* Auth Modal (High End Login) */}
-            <AuthModal
-                isOpen={showAuth}
-                notice={authNotice}
-                onClose={() => {
-                    setShowAuth(false);
-                    setAuthIntent(null);
-                    setAuthNotice(null);
-                }}
-                onPasswordLogin={handlePasswordLogin}
-                onSendAuthSms={handleSendAuthSms}
-                onSmsAuth={handleSmsAuth}
-                onNativeLoginSuccess={handleNativeAuthSuccess}
-            />
 
             {/* Tutorial Overlay */}
             {showTutorial && (
