@@ -1,6 +1,7 @@
 
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ComposedChart,
   Area,
@@ -22,6 +23,28 @@ import { Info, X, Crosshair, Eye, Plus, Minus, ArrowRight, CheckCircle2, Zap, Sn
 import { i18n } from '../services/i18n';
 
 // --- HELPER COMPONENTS ---
+
+const TRADING_MODAL_ROOT_ID = 'life-kline-trading-modal-root';
+const TRADING_MODAL_Z_INDEX = 2147482000;
+
+const getTradingModalRoot = () => {
+  if (typeof document === 'undefined') return null;
+
+  const existingRoot = document.getElementById(TRADING_MODAL_ROOT_ID);
+  if (existingRoot) return existingRoot;
+
+  const root = document.createElement('div');
+  root.id = TRADING_MODAL_ROOT_ID;
+  root.setAttribute('data-role', 'life-kline-trading-modal-root');
+  Object.assign(root.style, {
+    position: 'fixed',
+    inset: '0',
+    zIndex: String(TRADING_MODAL_Z_INDEX),
+    pointerEvents: 'none',
+  });
+  document.documentElement.appendChild(root);
+  return root;
+};
 
 // TRADING MODAL (Updated: Added Post-Trade Share Flow)
 const TradingModal: React.FC<{ 
@@ -54,6 +77,8 @@ const TradingModal: React.FC<{
   }, [isOpen]);
 
   if (!isOpen || !type) return null;
+  const portalRoot = getTradingModalRoot();
+  if (!portalRoot) return null;
 
   // Configuration Data
   const BUY_CATS = [i18n.t('trade.cat_career'), i18n.t('trade.cat_wealth'), i18n.t('trade.cat_health'), i18n.t('trade.cat_rel'), i18n.t('trade.cat_learn'), i18n.t('trade.cat_self')];
@@ -437,8 +462,8 @@ const TradingModal: React.FC<{
     );
   };
 
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+  return createPortal(
+    <div className="fixed inset-0 flex items-center justify-center pointer-events-auto">
        {/* Backdrop */}
        <div 
          className="absolute inset-0 bg-black/80 backdrop-blur-md transition-opacity duration-300"
@@ -453,7 +478,8 @@ const TradingModal: React.FC<{
           
           {renderContent()}
        </div>
-    </div>
+    </div>,
+    portalRoot
   );
 };
 
