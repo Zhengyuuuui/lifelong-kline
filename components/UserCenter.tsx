@@ -836,10 +836,10 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   );
 
   return (
-    <div className="fixed inset-0 z-[110] flex items-center justify-center p-0 md:p-6 bg-black/60 backdrop-blur-sm animate-fade-in">
+    <div className="fixed inset-0 z-[110] flex items-center justify-center overflow-hidden overscroll-contain p-0 md:p-6 bg-black/60 backdrop-blur-sm animate-fade-in">
        <ModuleHelperTag text="账户档案管理与偏好设置" />
        
-       <div className="w-full h-full md:max-h-[85vh] md:w-[800px] md:rounded-[40px] bg-[#0A0A0C] border border-white/10 flex flex-col md:flex-row overflow-hidden shadow-2xl relative">
+       <div className="w-full h-full md:max-h-[85vh] md:w-[800px] md:rounded-[40px] bg-[#0A0A0C] border border-white/10 flex flex-col md:flex-row overflow-hidden overscroll-contain shadow-2xl relative">
            {/* Abstract Background Glow */}
            <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-gradient-to-b from-white/5 to-transparent blur-[120px] rounded-full pointer-events-none" />
 
@@ -891,8 +891,8 @@ export const UserCenter: React.FC<UserCenterProps> = ({
            </div>
 
            {/* Main Content Area */}
-           <div className="flex-1 min-h-0 overflow-y-auto w-full no-scrollbar relative z-10">
-               <div className="min-h-full p-6 md:p-12 pb-24 md:pb-12">
+           <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain w-full no-scrollbar relative z-10 ios-fluid-scroll [-webkit-overflow-scrolling:touch]" style={{ touchAction: 'pan-y' }}>
+               <div className="min-h-full p-6 md:p-12 pb-[calc(6rem+env(safe-area-inset-bottom))] md:pb-12">
                    <h2 className="text-3xl font-light text-white mb-10 tracking-tight hidden md:block">
                        {menuItems.find(i => i.id === activeTab)?.label}
                    </h2>
