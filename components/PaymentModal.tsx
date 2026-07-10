@@ -103,8 +103,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const paymentSessionRef = React.useRef(0);
   const showNativeApplePayment = iosProductionBridge.isNativeRuntime();
   const inviteDiscountAvailable =
-    inviteStatus?.discountUnlocked === true &&
-    inviteStatus?.canCreateDiscountOrder === true;
+    inviteStatus?.discountUnlocked === true;
   const selectedProductId = inviteDiscountAvailable
     ? (inviteStatus?.discountProductId || INVITE_PRODUCT_ID)
     : STANDARD_PRODUCT_ID;

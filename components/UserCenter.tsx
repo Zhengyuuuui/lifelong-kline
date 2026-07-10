@@ -34,6 +34,20 @@ interface UserCenterProps {
 }
 
 type TabKey = 'profile' | 'membership' | 'security' | 'settings';
+const INVITE_SHARE_TEMPLATES = [
+  {
+    title: '这个我刚试了一下，感觉挺有意思的。',
+    body: '它会生成一份个人的人生 K 线和周期分析，有些阶段回头看还挺有共鸣。你也可以测一下：',
+  },
+  {
+    title: '来看看你的人生 K 线。',
+    body: '生成你的专属人生说明书，了解人生关键周期与阶段变化：',
+  },
+  {
+    title: '每个人，都有一条属于自己的人生 K 线。',
+    body: '回看走过的周期，理解当下的位置，发现人生中的关键转折。生成你的专属人生说明书：',
+  },
+] as const;
 
 export const UserCenter: React.FC<UserCenterProps> = ({ 
   isOpen, onClose, userProfile, user, identities = [], accountSecurity, onLogout, onPasswordChanged, isPremium, onRequirePayment, membershipOnly = false, insight, loading, onAnalyze, onShowInsight
@@ -41,7 +55,8 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   const [activeTab, setActiveTab] = useState<TabKey>('membership');
   const [copied, setCopied] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
-  const [inviteCopyState, setInviteCopyState] = useState<'idle' | 'code' | 'url'>('idle');
+  const [inviteShareTemplateIndex, setInviteShareTemplateIndex] = useState(0);
+  const [inviteCopyState, setInviteCopyState] = useState<'idle' | 'message'>('idle');
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -83,8 +98,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   if (!isOpen) return null;
 
   const inviteDiscountAvailable =
-    inviteStatus?.discountUnlocked === true &&
-    inviteStatus?.canCreateDiscountOrder === true;
+    inviteStatus?.discountUnlocked === true;
   const membershipAmountCents = inviteDiscountAvailable
     ? (inviteStatus?.discountAmountCents || 880)
     : 1880;
@@ -97,19 +111,35 @@ export const UserCenter: React.FC<UserCenterProps> = ({
     (_, index) => index + 1
   );
 
-  const copyInviteValue = async (kind: 'code' | 'url') => {
-    const value = kind === 'code'
-      ? inviteStatus?.inviteCode
-      : inviteStatus?.inviteUrl;
+  const inviteShareTemplate =
+    INVITE_SHARE_TEMPLATES[inviteShareTemplateIndex] ??
+    INVITE_SHARE_TEMPLATES[0];
 
-    if (!value) return;
+  const inviteShareText = inviteStatus?.inviteUrl
+    ? [
+        inviteShareTemplate.title,
+        inviteShareTemplate.body,
+        inviteStatus.inviteUrl,
+      ].join('\n\n')
+    : '';
+
+  const openShareModal = () => {
+    setInviteShareTemplateIndex(
+      Math.floor(Math.random() * INVITE_SHARE_TEMPLATES.length)
+    );
+    setInviteCopyState('idle');
+    setShowShareModal(true);
+  };
+
+  const copyInviteMessage = async () => {
+    if (!inviteShareText) return;
 
     try {
-      await navigator.clipboard.writeText(value);
-      setInviteCopyState(kind);
+      await navigator.clipboard.writeText(inviteShareText);
+      setInviteCopyState('message');
       window.setTimeout(() => setInviteCopyState('idle'), 1800);
     } catch (error) {
-      console.warn('Unable to copy invite value', error);
+      console.warn('Unable to copy invite message', error);
     }
   };
 
@@ -199,7 +229,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   const ShareUnlockModal = () => {
       if (!showShareModal) return null;
 
-      const inviteReady = Boolean(inviteStatus?.inviteCode && inviteStatus?.inviteUrl);
+      const inviteReady = Boolean(inviteStatus?.inviteUrl);
 
       return (
           <div className="fixed inset-0 z-[120] flex items-center justify-center p-6">
@@ -248,52 +278,52 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                   </div>
 
                   <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                      <div className="flex items-center justify-between gap-4">
-                          <div className="min-w-0">
-                              <p className="text-[10px] uppercase tracking-[0.18em] text-white/35">我的邀请码</p>
-                              <p className="mt-1 truncate font-mono text-sm text-white/85">
-                                  {inviteStatusLoading
-                                    ? '正在生成…'
-                                    : inviteStatus?.inviteCode || '暂时无法获取'}
-                              </p>
-                          </div>
-                          <button
-                            type="button"
-                            disabled={!inviteStatus?.inviteCode}
-                            onClick={() => void copyInviteValue('code')}
-                            className="shrink-0 rounded-lg border border-white/10 px-3 py-2 text-[11px] text-white/65 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-35"
-                          >
-                              {inviteCopyState === 'code' ? '已复制' : '复制'}
-                          </button>
-                      </div>
+                      <p className="text-[10px] uppercase tracking-[0.18em] text-white/35">
+                          我的邀请码
+                      </p>
+                      <p className="mt-1 truncate font-mono text-sm text-white/85">
+                          {inviteStatusLoading
+                            ? '正在生成…'
+                            : inviteStatus?.inviteCode || '暂时无法获取'}
+                      </p>
                   </div>
 
-                  {inviteDiscountAvailable ? (
+                  <div className="mb-5 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-black/30 p-4">
+                      <p className="whitespace-pre-wrap text-sm leading-6 text-white/70">
+                          {inviteShareText || '正在生成邀请文案…'}
+                      </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={!inviteReady || inviteStatusLoading}
+                    onClick={() => void copyInviteMessage()}
+                    className="w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-indigo-500/30 bg-indigo-500/10 text-white font-medium hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                      {inviteCopyState === 'message'
+                        ? <Check size={16} />
+                        : <Copy size={16} />}
+                      <span className="text-sm tracking-wide">
+                          {inviteStatusLoading
+                            ? '正在生成邀请文案…'
+                            : inviteCopyState === 'message'
+                              ? '完整邀请文案已复制'
+                              : '复制完整邀请文案'}
+                      </span>
+                  </button>
+
+                  {inviteDiscountAvailable && (
                     <button
                       type="button"
                       onClick={() => {
                         setShowShareModal(false);
                         onRequirePayment();
                       }}
-                      className="w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/40 bg-amber-500/15 text-amber-200 font-bold hover:bg-amber-500/25 transition-colors"
+                      className="mt-3 w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/40 bg-amber-500/15 text-amber-200 font-bold hover:bg-amber-500/25 transition-colors"
                     >
                         <Sparkles size={16} />
-                        <span className="text-sm tracking-wide">¥8.80 开通终身会员</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={!inviteReady || inviteStatusLoading}
-                      onClick={() => void copyInviteValue('url')}
-                      className="w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-indigo-500/30 bg-indigo-500/10 text-white font-medium hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                        <Share2 size={16} />
                         <span className="text-sm tracking-wide">
-                          {inviteStatusLoading
-                            ? '正在获取邀请链接…'
-                            : inviteCopyState === 'url'
-                              ? '邀请链接已复制'
-                              : '复制邀请链接'}
+                            ¥8.80 开通终身会员
                         </span>
                     </button>
                   )}
@@ -489,7 +519,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                 
                 <button 
                     type="button"
-                    onClick={() => setShowShareModal(true)}
+                    onClick={openShareModal}
                     className="relative z-10 w-full flex items-center justify-center gap-2 px-6 py-4 rounded-xl text-sm font-bold tracking-widest transition-all border border-indigo-500/30 bg-indigo-500/10 text-white hover:bg-indigo-500/20 hover:border-indigo-400 active:scale-95"
                 >
                     {inviteDiscountAvailable ? '查看已解锁权益' : '获取邀请链接'}

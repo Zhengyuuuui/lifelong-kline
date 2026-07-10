@@ -172,6 +172,25 @@ export class XunhupayService {
     }
 
     const { product, payType } = validateCreatePayload(rawPayload);
+
+    if (product.productId === INVITE_DISCOUNT_PRODUCT_ID) {
+      const reusableOrder = await this.findReusableInviteDiscountOrder(userId);
+      if (reusableOrder) {
+        return {
+          ok: true,
+          orderId: reusableOrder.id,
+          merchantOrderNo: reusableOrder.merchant_order_no,
+          paymentProvider: XUNHUPAY_PROVIDER,
+          paymentStatus: reusableOrder.payment_status,
+          amountCents: reusableOrder.amount_cents,
+          currency: reusableOrder.currency,
+          payUrl: reusableOrder.pay_url,
+          qrCodeUrl: reusableOrder.qr_code_url,
+          reused: true,
+        };
+      }
+    }
+
     const merchantOrderNo = createMerchantOrderNo();
     const totalFee = amountCentsToTotalFee(product.amountCents);
 
@@ -596,6 +615,156 @@ export class XunhupayService {
       [merchantOrderNo, XUNHUPAY_PROVIDER]
     );
     return result.rows[0] || null;
+  }
+
+  private async findReusableInviteDiscountOrder(userId: string) {
+    return withTransaction(async (client) => {
+      const result = await client.query<{
+        eligibility_id: string;
+        order_id: string;
+        merchant_order_no: string;
+        payment_status: OrderStatus;
+        amount_cents: number;
+        currency: string;
+        created_at: string;
+        pay_url: string | null;
+        qr_code_url: string | null;
+        session_fresh: boolean;
+      }>(
+        `
+          SELECT
+            e.id AS eligibility_id,
+            o.id AS order_id,
+            o.merchant_order_no,
+            o.payment_status,
+            o.amount_cents,
+            o.currency,
+            o.created_at::text,
+            NULLIF(
+              o.raw_receipt #>> '{gateway,response,url}',
+              ''
+            ) AS pay_url,
+            NULLIF(
+              o.raw_receipt #>> '{gateway,response,url_qrcode}',
+              ''
+            ) AS qr_code_url,
+            (
+              o.created_at >= now() - interval '30 minutes'
+            ) AS session_fresh
+          FROM user_discount_eligibilities e
+          JOIN orders o
+            ON o.id = e.reserved_order_id
+           AND o.eligibility_id = e.id
+          WHERE e.user_id = $1::uuid
+            AND e.eligibility_type = $2
+            AND e.status = 'reserved'
+            AND e.consumed_order_id IS NULL
+            AND o.user_id = $1::uuid
+            AND o.product_id = $3
+            AND o.payment_provider = $4
+            AND (
+              SELECT count(*)
+              FROM invite_referrals r
+              WHERE r.inviter_user_id = e.user_id
+                AND r.status = 'qualified'
+            ) >= e.required_count
+          LIMIT 1
+          FOR UPDATE OF e, o
+        `,
+        [
+          userId,
+          INVITE_DISCOUNT_ELIGIBILITY_TYPE,
+          INVITE_DISCOUNT_PRODUCT_ID,
+          XUNHUPAY_PROVIDER,
+        ]
+      );
+
+      const existing = result.rows[0];
+      if (!existing) {
+        return null;
+      }
+
+      if (
+        existing.payment_status === "pending" &&
+        existing.session_fresh &&
+        (existing.pay_url || existing.qr_code_url)
+      ) {
+        return {
+          id: existing.order_id,
+          merchant_order_no: existing.merchant_order_no,
+          payment_status: existing.payment_status,
+          amount_cents: existing.amount_cents,
+          currency: existing.currency,
+          pay_url: existing.pay_url,
+          qr_code_url: existing.qr_code_url,
+        };
+      }
+
+      if (existing.payment_status === "success") {
+        throw new HttpError(
+          409,
+          "Invite discount order has already been paid"
+        );
+      }
+
+      const cancellationReason = existing.session_fresh
+        ? "payment_session_missing_gateway_url"
+        : "payment_session_expired";
+
+      if (existing.payment_status === "pending") {
+        await client.query(
+          `
+            UPDATE orders
+            SET
+              payment_status = 'cancelled',
+              failed_at = COALESCE(failed_at, now()),
+              raw_receipt = raw_receipt || $2::jsonb
+            WHERE id = $1::uuid
+              AND payment_status = 'pending'
+          `,
+          [
+            existing.order_id,
+            json({
+              cancellation: {
+                reason: cancellationReason,
+                cancelledAt: new Date().toISOString(),
+              },
+            }),
+          ]
+        );
+      }
+
+      await client.query(
+        `
+          UPDATE user_discount_eligibilities
+          SET
+            status = 'unlocked',
+            reserved_order_id = NULL
+          WHERE id = $1::uuid
+            AND status = 'reserved'
+            AND consumed_order_id IS NULL
+            AND reserved_order_id = $2::uuid
+        `,
+        [
+          existing.eligibility_id,
+          existing.order_id,
+        ]
+      );
+
+      await this.insertAuditEvent(
+        client,
+        userId,
+        "invite.discount_reservation_released",
+        {
+          orderId: existing.order_id,
+          eligibilityId: existing.eligibility_id,
+          reason: cancellationReason,
+          createdAt: existing.created_at,
+        }
+      );
+
+      return null;
+    });
   }
 
   private async insertInviteDiscountPendingOrder(

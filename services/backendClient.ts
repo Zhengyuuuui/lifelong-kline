@@ -170,6 +170,7 @@ export interface XunhuPaymentCreateResult {
   currency?: "CNY" | string;
   payUrl?: string | null;
   qrCodeUrl?: string | null;
+  reused?: boolean;
 }
 
 export interface PaymentOrderStatusResult {
