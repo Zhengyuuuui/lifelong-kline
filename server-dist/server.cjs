@@ -3537,8 +3537,12 @@ var TencentSmsService = class {
 };
 
 // server/postgres/aliyunSms.service.ts
-var import_dypnsapi20170525 = __toESM(require("@alicloud/dypnsapi20170525"), 1);
+var import_node_module = require("node:module");
 var import_utils = require("@alicloud/openapi-core/dist/utils.js");
+var require2 = (0, import_node_module.createRequire)(__filename);
+var DypnsapiModule = require2("@alicloud/dypnsapi20170525");
+var DypnsapiClient = DypnsapiModule.default;
+var SendSmsVerifyCodeRequest = DypnsapiModule.SendSmsVerifyCodeRequest;
 var normalizePhoneForAliyun = (phone, countryCode) => {
   const compact = phone.replace(/[\s().-]/g, "");
   if (countryCode === "86" && compact.startsWith("+86")) {
@@ -3549,7 +3553,7 @@ var normalizePhoneForAliyun = (phone, countryCode) => {
 var AliyunSmsService = class {
   async sendVerificationCode(input) {
     const config = getBackendConfig();
-    const client = new import_dypnsapi20170525.default(new import_utils.Config({
+    const client = new DypnsapiClient(new import_utils.Config({
       accessKeyId: config.alibabaCloudAccessKeyId,
       accessKeySecret: config.alibabaCloudAccessKeySecret,
       regionId: config.aliyunDypnsRegion,
@@ -3560,7 +3564,7 @@ var AliyunSmsService = class {
       [config.aliyunSmsMinParamName]: String(Math.ceil(input.ttlSeconds / 60))
     };
     const response = await client.sendSmsVerifyCode(
-      new import_dypnsapi20170525.SendSmsVerifyCodeRequest({
+      new SendSmsVerifyCodeRequest({
         countryCode: config.aliyunSmsCountryCode,
         phoneNumber: normalizePhoneForAliyun(input.phone, config.aliyunSmsCountryCode),
         signName: config.aliyunSmsSignName,
@@ -3573,12 +3577,27 @@ var AliyunSmsService = class {
         returnVerifyCode: false,
         outId: input.challengeId
       })
-    ).catch(() => {
-      throw new HttpError(502, "Sms provider unavailable");
+    ).catch((error) => {
+      console.error("[AliyunSms] request_failed", {
+        name: error?.name,
+        message: error?.message,
+        code: error?.code,
+        statusCode: error?.statusCode,
+        requestId: error?.requestId
+      });
+      const detail = [error?.code, error?.message].filter(Boolean).join(": ");
+      throw new HttpError(502, detail ? `Sms provider unavailable: ${detail}` : "Sms provider unavailable");
     });
     const body = response.body;
     if (!body?.success || body.code !== "OK") {
-      throw new HttpError(502, "Sms provider unavailable");
+      console.error("[AliyunSms] provider_rejected", {
+        code: body?.code,
+        message: body?.message,
+        requestId: body?.requestId || body?.model?.requestId,
+        success: body?.success
+      });
+      const detail = [body?.code, body?.message].filter(Boolean).join(": ");
+      throw new HttpError(502, detail ? `Sms provider unavailable: ${detail}` : "Sms provider unavailable");
     }
     return {
       requestId: body.model?.requestId || body.model?.bizId || body.requestId || ""
@@ -3732,7 +3751,9 @@ var SmsService = class {
         purpose: payload.purpose,
         phoneHash,
         deviceHash,
-        reason: error instanceof HttpError ? error.message : "provider_failed"
+        reason: error instanceof Error && error.message ? error.message : "provider_failed",
+        errorName: error instanceof Error ? error.name : void 0,
+        errorCode: typeof error === "object" && error !== null && "code" in error ? String(error.code) : void 0
       }, meta);
       throw error;
     }

@@ -199,7 +199,9 @@ export class SmsService {
         purpose: payload.purpose,
         phoneHash,
         deviceHash,
-        reason: error instanceof HttpError ? error.message : "provider_failed",
+        reason: error instanceof Error && error.message ? error.message : "provider_failed",
+        errorName: error instanceof Error ? error.name : undefined,
+        errorCode: typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : undefined,
       }, meta);
       throw error;
     }

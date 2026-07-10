@@ -1,8 +1,18 @@
-import DypnsapiClient, { SendSmsVerifyCodeRequest } from "@alicloud/dypnsapi20170525";
+import { createRequire } from "node:module";
 import { Config as OpenApiConfig } from "@alicloud/openapi-core/dist/utils.js";
 import { getBackendConfig } from "./env";
 import { HttpError } from "./errors";
 import type { SendVerificationCodeInput, SmsProviderResult } from "./tencentSms.service";
+
+const require = createRequire(__filename);
+const DypnsapiModule = require("@alicloud/dypnsapi20170525") as {
+  default: new (config: OpenApiConfig) => {
+    sendSmsVerifyCode(request: unknown): Promise<{ body: any }>;
+  };
+  SendSmsVerifyCodeRequest: new (params: Record<string, unknown>) => unknown;
+};
+const DypnsapiClient = DypnsapiModule.default;
+const SendSmsVerifyCodeRequest = DypnsapiModule.SendSmsVerifyCodeRequest;
 
 const normalizePhoneForAliyun = (phone: string, countryCode: string) => {
   const compact = phone.replace(/[\s().-]/g, "");
@@ -40,13 +50,28 @@ export class AliyunSmsService {
         returnVerifyCode: false,
         outId: input.challengeId,
       })
-    ).catch(() => {
-      throw new HttpError(502, "Sms provider unavailable");
+    ).catch((error) => {
+      console.error("[AliyunSms] request_failed", {
+        name: error?.name,
+        message: error?.message,
+        code: error?.code,
+        statusCode: error?.statusCode,
+        requestId: error?.requestId,
+      });
+      const detail = [error?.code, error?.message].filter(Boolean).join(": ");
+      throw new HttpError(502, detail ? `Sms provider unavailable: ${detail}` : "Sms provider unavailable");
     });
 
     const body = response.body;
     if (!body?.success || body.code !== "OK") {
-      throw new HttpError(502, "Sms provider unavailable");
+      console.error("[AliyunSms] provider_rejected", {
+        code: body?.code,
+        message: body?.message,
+        requestId: body?.requestId || body?.model?.requestId,
+        success: body?.success,
+      });
+      const detail = [body?.code, body?.message].filter(Boolean).join(": ");
+      throw new HttpError(502, detail ? `Sms provider unavailable: ${detail}` : "Sms provider unavailable");
     }
 
     return {
