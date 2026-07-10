@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect } from 'react';
+import QRCode from 'qrcode';
 import { UserInputProfile, SegmentInsight } from '../types';
 import { storage } from '../services/storageService';
 import { 
   X, User, Crown, Shield, LogOut, Settings, Bell, ChevronRight, ChevronLeft,
   Smartphone, AlertTriangle, Fingerprint, Gem, CreditCard, Lock, EyeOff,
   Globe, FileText, HelpCircle, CheckCircle2, Copy, Sparkles, Share2, Check, Users,
-  Eye, Cpu, TrendingUp
+  Eye, Cpu, TrendingUp, Download
 } from 'lucide-react';
 import { i18n } from '../services/i18n';
 import { backendClient, type AuthIdentity, type BackendUser, type InviteStatusResult } from '../services/backendClient';
@@ -57,6 +58,9 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   const [showShareModal, setShowShareModal] = useState(false);
   const [inviteShareTemplateIndex, setInviteShareTemplateIndex] = useState(0);
   const [inviteCopyState, setInviteCopyState] = useState<'idle' | 'message'>('idle');
+  const [inviteQrDataUrl, setInviteQrDataUrl] = useState('');
+  const [posterExportState, setPosterExportState] =
+    useState<'idle' | 'generating' | 'done' | 'error'>('idle');
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -128,6 +132,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
       Math.floor(Math.random() * INVITE_SHARE_TEMPLATES.length)
     );
     setInviteCopyState('idle');
+    setPosterExportState('idle');
     setShowShareModal(true);
   };
 
@@ -140,6 +145,122 @@ export const UserCenter: React.FC<UserCenterProps> = ({
       window.setTimeout(() => setInviteCopyState('idle'), 1800);
     } catch (error) {
       console.warn('Unable to copy invite message', error);
+    }
+  };
+
+  useEffect(() => {
+    if (!showShareModal || !inviteStatus?.inviteUrl) {
+      setInviteQrDataUrl('');
+      return;
+    }
+
+    let cancelled = false;
+    setPosterExportState('idle');
+
+    void QRCode.toDataURL(inviteStatus.inviteUrl, {
+      width: 160,
+      margin: 2,
+      errorCorrectionLevel: 'H',
+      color: {
+        dark: '#111827',
+        light: '#FFFFFF',
+      },
+    })
+      .then((dataUrl) => {
+        if (!cancelled) {
+          setInviteQrDataUrl(dataUrl);
+        }
+      })
+      .catch((error) => {
+        console.warn('Unable to generate invite QR code', error);
+        if (!cancelled) {
+          setInviteQrDataUrl('');
+          setPosterExportState('error');
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [showShareModal, inviteStatus?.inviteUrl]);
+
+  const exportInvitePoster = async () => {
+    if (!inviteQrDataUrl || posterExportState === 'generating') {
+      return;
+    }
+
+    setPosterExportState('generating');
+
+    const loadImage = (src: string) =>
+      new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error(`Unable to load image: ${src}`));
+        image.src = src;
+      });
+
+    try {
+      const [posterImage, qrImage] = await Promise.all([
+        loadImage('/invite-poster.png'),
+        loadImage(inviteQrDataUrl),
+      ]);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = posterImage.naturalWidth;
+      canvas.height = posterImage.naturalHeight;
+
+      const context = canvas.getContext('2d');
+      if (!context) {
+        throw new Error('Canvas 2D context is unavailable');
+      }
+
+      context.drawImage(
+        posterImage,
+        0,
+        0,
+        canvas.width,
+        canvas.height
+      );
+
+      const qrX = 168;
+      const qrY = 1445;
+      const qrSize = 160;
+
+      // 保持二维码边缘清晰，不启用图像平滑。
+      context.imageSmoothingEnabled = false;
+      context.drawImage(
+        qrImage,
+        qrX,
+        qrY,
+        qrSize,
+        qrSize
+      );
+
+      const blob = await new Promise<Blob | null>((resolve) => {
+        canvas.toBlob(resolve, 'image/jpeg', 0.9);
+      });
+
+      if (!blob) {
+        throw new Error('Poster image creation failed');
+      }
+
+      const filename =
+        `人生说明书-邀请海报-${inviteStatus?.inviteCode || 'invite'}.jpg`;
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+
+      anchor.href = objectUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+
+      window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+      setPosterExportState('done');
+      window.setTimeout(() => setPosterExportState('idle'), 2000);
+    } catch (error) {
+      console.warn('Unable to export invite poster', error);
+      setPosterExportState('error');
     }
   };
 
@@ -312,6 +433,32 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                       </span>
                   </button>
 
+                  <button
+                    type="button"
+                    disabled={
+                      !inviteReady ||
+                      !inviteQrDataUrl ||
+                      posterExportState === 'generating'
+                    }
+                    onClick={() => void exportInvitePoster()}
+                    className="mt-3 w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/30 bg-amber-500/10 text-amber-100 font-medium hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                      {posterExportState === 'done'
+                        ? <Check size={16} />
+                        : <Download size={16} />}
+                      <span className="text-sm tracking-wide">
+                          {!inviteQrDataUrl
+                            ? '正在生成邀请二维码…'
+                            : posterExportState === 'generating'
+                              ? '正在生成邀请海报…'
+                              : posterExportState === 'done'
+                                ? '邀请海报已保存'
+                                : posterExportState === 'error'
+                                  ? '生成失败，请重试'
+                                  : '保存邀请海报'}
+                      </span>
+                  </button>
+
                   {inviteDiscountAvailable && (
                     <button
                       type="button"
@@ -332,6 +479,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                       仅新用户通过你的邀请链接完成注册后计入进度。
                   </p>
               </div>
+
           </div>
       );
   };
