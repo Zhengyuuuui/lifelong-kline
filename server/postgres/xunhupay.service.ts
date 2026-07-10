@@ -2,6 +2,13 @@ import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
 import { getBackendConfig } from "./env";
 import { HttpError } from "./errors";
+import {
+  INVITE_DISCOUNT_ELIGIBILITY_TYPE,
+  INVITE_DISCOUNT_ORIGINAL_AMOUNT_CENTS,
+  INVITE_DISCOUNT_PRODUCT_ID,
+  INVITE_DISCOUNT_TYPE,
+  InviteService,
+} from "./invite.service";
 import { query, withTransaction } from "./db";
 import {
   amountCentsToTotalFee,
@@ -22,6 +29,8 @@ type ProductConfig = {
   title: string;
   plan: "monthly" | "lifetime";
   durationDays: number | null;
+  originalAmountCents?: number;
+  discountType?: string;
 };
 
 type OrderStatus = "pending" | "success" | "failed" | "refunded" | "cancelled";
@@ -41,6 +50,8 @@ interface OrderRow {
   amount_cents: number | null;
   currency: string;
   paid_at: string | null;
+  eligibility_id: string | null;
+  discount_type: string | null;
 }
 
 interface MembershipRow {
@@ -75,6 +86,17 @@ const PRODUCTS: ProductConfig[] = [
     title: "人生K线终身权限",
     plan: "lifetime",
     durationDays: null,
+  },
+  {
+    productId: INVITE_DISCOUNT_PRODUCT_ID,
+    aliases: ["life_kline_lifetime_invite_880"],
+    amountCents: 880,
+    currency: "CNY",
+    title: "人生K线邀请专享终身会员",
+    plan: "lifetime",
+    durationDays: null,
+    originalAmountCents: INVITE_DISCOUNT_ORIGINAL_AMOUNT_CENTS,
+    discountType: INVITE_DISCOUNT_TYPE,
   },
 ];
 
@@ -141,6 +163,8 @@ const parseGatewayResponse = (text: string, contentType: string) => {
 };
 
 export class XunhupayService {
+  private readonly inviteService = new InviteService();
+
   async createPaymentOrder(userId: string, rawPayload: CreatePaymentPayload) {
     const config = getBackendConfig();
     if (config.paymentsProvider !== XUNHUPAY_PROVIDER) {
@@ -151,7 +175,9 @@ export class XunhupayService {
     const merchantOrderNo = createMerchantOrderNo();
     const totalFee = amountCentsToTotalFee(product.amountCents);
 
-    const order = await this.insertPendingOrder(userId, product, merchantOrderNo, payType);
+    const order = product.productId === INVITE_DISCOUNT_PRODUCT_ID
+      ? await this.insertInviteDiscountPendingOrder(userId, product, merchantOrderNo, payType)
+      : await this.insertPendingOrder(userId, product, merchantOrderNo, payType);
 
     if (config.paymentsMode !== "live") {
       await this.storeGatewayResult(order.id, {
@@ -254,6 +280,7 @@ export class XunhupayService {
 
       await this.markOrderPaid(client, order, formPayload, hash);
       await this.upsertMembership(client, order.user_id, order.id, order.product_id);
+      await this.consumeInviteDiscountIfNeeded(client, order);
       await this.markCallback(callbackId, "processed", true, undefined, client);
       await this.insertAuditEvent(client, order.user_id, "payment.xunhupay_paid", {
         orderId: order.id,
@@ -329,10 +356,15 @@ export class XunhupayService {
     userId: string,
     product: ProductConfig,
     merchantOrderNo: string,
-    payType: PayType
+    payType: PayType,
+    client?: PoolClient,
+    discount?: {
+      eligibilityId: string | null;
+      originalAmountCents: number | null;
+      discountType: string | null;
+    }
   ) {
-    const result = await query<OrderRow>(
-      `
+    const sql = `
         INSERT INTO orders (
           user_id,
           merchant_order_no,
@@ -342,35 +374,67 @@ export class XunhupayService {
           environment,
           amount_cents,
           currency,
-          raw_receipt
+          raw_receipt,
+          eligibility_id,
+          original_amount_cents,
+          discount_type
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8::jsonb)
-        RETURNING id, user_id, merchant_order_no, product_id, payment_status, amount_cents, currency, paid_at::text
-      `,
-      [
-        userId,
-        merchantOrderNo,
-        product.productId,
-        XUNHUPAY_PROVIDER,
-        getBackendConfig().appEnv,
-        product.amountCents,
-        product.currency,
-        json({
-          create: {
-            payType,
-            title: product.title,
-            amountCents: product.amountCents,
-          },
-        }),
-      ]
-    );
-    await query(
-      `
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8::jsonb, $9::uuid, $10, $11)
+        RETURNING
+          id,
+          user_id,
+          merchant_order_no,
+          product_id,
+          payment_status,
+          amount_cents,
+          currency,
+          paid_at::text,
+          eligibility_id::text,
+          discount_type
+      `;
+    const values = [
+      userId,
+      merchantOrderNo,
+      product.productId,
+      XUNHUPAY_PROVIDER,
+      getBackendConfig().appEnv,
+      product.amountCents,
+      product.currency,
+      json({
+        create: {
+          payType,
+          title: product.title,
+          amountCents: product.amountCents,
+          originalAmountCents: discount?.originalAmountCents || undefined,
+          discountType: discount?.discountType || undefined,
+        },
+      }),
+      discount?.eligibilityId || null,
+      discount?.originalAmountCents || null,
+      discount?.discountType || null,
+    ];
+    const result = client
+      ? await client.query<OrderRow>(sql, values)
+      : await query<OrderRow>(sql, values);
+    const auditSql = `
         INSERT INTO audit_events (user_id, event_type, metadata)
         VALUES ($1, 'payment.xunhupay_order_created', $2::jsonb)
-      `,
-      [userId, json({ orderId: result.rows[0].id, merchantOrderNo, productId: product.productId, payType })]
-    );
+      `;
+    const auditValues = [
+      userId,
+      json({
+        orderId: result.rows[0].id,
+        merchantOrderNo,
+        productId: product.productId,
+        payType,
+        discountType: discount?.discountType || undefined,
+      }),
+    ];
+    if (client) {
+      await client.query(auditSql, auditValues);
+    } else {
+      await query(auditSql, auditValues);
+    }
     return result.rows[0];
   }
 
@@ -523,6 +587,7 @@ export class XunhupayService {
     const result = await client.query<OrderRow>(
       `
         SELECT id, user_id, merchant_order_no, product_id, payment_status, amount_cents, currency, paid_at::text
+          , eligibility_id::text, discount_type
         FROM orders
         WHERE merchant_order_no = $1
           AND payment_provider = $2
@@ -531,6 +596,102 @@ export class XunhupayService {
       [merchantOrderNo, XUNHUPAY_PROVIDER]
     );
     return result.rows[0] || null;
+  }
+
+  private async insertInviteDiscountPendingOrder(
+    userId: string,
+    product: ProductConfig,
+    merchantOrderNo: string,
+    payType: PayType
+  ) {
+    return withTransaction(async (client) => {
+      const eligibility = await this.inviteService.getEligibilityForUpdate(client, userId);
+      const qualifiedCount = await this.inviteService.countQualifiedReferrals(client, userId);
+      if (
+        eligibility.status !== "unlocked" ||
+        qualifiedCount < eligibility.required_count ||
+        eligibility.consumed_order_id
+      ) {
+        throw new HttpError(403, "Invite discount is not unlocked");
+      }
+
+      const activeLifetime = await client.query<{ id: string }>(
+        `
+          SELECT id
+          FROM memberships
+          WHERE user_id = $1
+            AND status = 'active'
+            AND expires_at IS NULL
+          LIMIT 1
+        `,
+        [userId]
+      );
+      if (activeLifetime.rows[0]) {
+        throw new HttpError(403, "Invite discount is not available");
+      }
+
+      const successDiscount = await client.query<{ id: string }>(
+        `
+          SELECT id
+          FROM orders
+          WHERE user_id = $1
+            AND payment_provider = $2
+            AND product_id = $3
+            AND payment_status = 'success'
+          LIMIT 1
+        `,
+        [userId, XUNHUPAY_PROVIDER, INVITE_DISCOUNT_PRODUCT_ID]
+      );
+      if (successDiscount.rows[0]) {
+        throw new HttpError(403, "Invite discount is not available");
+      }
+
+      const existingPending = await client.query<{ id: string }>(
+        `
+          SELECT id
+          FROM orders
+          WHERE eligibility_id = $1::uuid
+            AND payment_status = 'pending'
+            AND payment_provider = $2
+          LIMIT 1
+        `,
+        [eligibility.id, XUNHUPAY_PROVIDER]
+      );
+      if (existingPending.rows[0]) {
+        throw new HttpError(409, "Invite discount order already pending");
+      }
+
+      const order = await this.insertPendingOrder(
+        userId,
+        product,
+        merchantOrderNo,
+        payType,
+        client,
+        {
+          eligibilityId: eligibility.id,
+          originalAmountCents: product.originalAmountCents || null,
+          discountType: product.discountType || null,
+        }
+      );
+      await client.query(
+        `
+          UPDATE user_discount_eligibilities
+          SET status = 'reserved', reserved_order_id = $2::uuid
+          WHERE id = $1::uuid
+        `,
+        [eligibility.id, order.id]
+      );
+      await this.insertAuditEvent(client, userId, "invite.discount_order_created", {
+        orderId: order.id,
+        eligibilityId: eligibility.id,
+        productId: product.productId,
+      });
+      await this.insertAuditEvent(client, userId, "invite.discount_reserved", {
+        orderId: order.id,
+        eligibilityId: eligibility.id,
+      });
+      return order;
+    });
   }
 
   private async recordVerifiedNotify(
@@ -666,6 +827,32 @@ export class XunhupayService {
       `,
       params
     );
+  }
+
+  private async consumeInviteDiscountIfNeeded(client: PoolClient, order: OrderRow) {
+    if (
+      order.product_id !== INVITE_DISCOUNT_PRODUCT_ID ||
+      order.discount_type !== INVITE_DISCOUNT_TYPE ||
+      !order.eligibility_id
+    ) {
+      return;
+    }
+    const result = await client.query<{ id: string }>(
+      `
+        UPDATE user_discount_eligibilities
+        SET status = 'consumed', consumed_order_id = $2::uuid
+        WHERE id = $1::uuid
+          AND status <> 'consumed'
+        RETURNING id
+      `,
+      [order.eligibility_id, order.id]
+    );
+    if (result.rows[0]) {
+      await this.insertAuditEvent(client, order.user_id, "invite.discount_consumed", {
+        orderId: order.id,
+        eligibilityId: order.eligibility_id,
+      });
+    }
   }
 
   private async insertAuditEvent(

@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { StrategyKit } from '../types';
 import { X, Lightbulb, ShieldAlert, Target } from 'lucide-react';
 import { useLanguage } from '../contexts/LanguageContext';
@@ -12,23 +13,23 @@ interface Props {
 
 const StrategySheet: React.FC<Props> = ({ isOpen, onClose, data, isLoading }) => {
   const { t } = useLanguage();
-  return (
+  const sheet = (
     <>
       {/* Backdrop */}
       <div 
-        className={`fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+        className={`fixed inset-0 bg-black/60 backdrop-blur-sm z-[130] transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
         onClick={onClose}
       />
       
       {/* Sheet */}
-      <div className={`fixed inset-x-0 bottom-0 z-[70] w-full max-h-[85vh] bg-[#12141E]/95 backdrop-blur-[40px] rounded-t-[32px] border-t border-white/10 flex flex-col shadow-[0_-20px_60px_rgba(0,0,0,0.8)] transition-transform duration-500 ease-sheet ${
+      <div className={`fixed inset-x-0 bottom-0 z-[140] w-full max-h-[85vh] min-h-0 overflow-hidden bg-[#12141E]/95 backdrop-blur-[40px] rounded-t-[32px] border-t border-white/10 flex flex-col shadow-[0_-20px_60px_rgba(0,0,0,0.8)] transition-transform duration-500 ease-sheet ${
           isOpen ? 'translate-y-0' : 'translate-y-[100%] pointer-events-none'
       }`}>
         
         <div className="absolute top-3 left-1/2 -translate-x-1/2 w-10 h-1 bg-white/20 rounded-full" />
 
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-6 pb-2">
+        <div className="flex shrink-0 items-center justify-between px-6 py-6 pb-2">
            <h3 className="text-[18px] font-bold text-white tracking-wide">
              {isLoading ? t('strategy.loading') : data?.title || '行动锦囊'}
            </h3>
@@ -38,7 +39,7 @@ const StrategySheet: React.FC<Props> = ({ isOpen, onClose, data, isLoading }) =>
         </div>
 
         {/* Content */}
-        <div className="p-6 pt-4 pb-12 overflow-y-auto">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-6 pt-4 pb-12 smooth-scroll" style={{ touchAction: 'pan-y' }}>
             {isLoading ? (
                 <div className="flex flex-col items-center py-10 gap-4">
                     <div className="w-10 h-10 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin" />
@@ -86,6 +87,8 @@ const StrategySheet: React.FC<Props> = ({ isOpen, onClose, data, isLoading }) =>
       </div>
     </>
   );
+
+  return typeof document === 'undefined' ? sheet : createPortal(sheet, document.body);
 };
 
 export default StrategySheet;

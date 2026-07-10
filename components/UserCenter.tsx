@@ -5,7 +5,7 @@ import { storage } from '../services/storageService';
 import { 
   X, User, Crown, Shield, LogOut, Settings, Bell, ChevronRight, ChevronLeft,
   Smartphone, AlertTriangle, Fingerprint, Gem, CreditCard, Lock, EyeOff,
-  Globe, FileText, HelpCircle, CheckCircle2, Copy, Sparkles, Share2, Send, Check, Users,
+  Globe, FileText, HelpCircle, CheckCircle2, Copy, Sparkles, Share2, Check, Users,
   Eye, Cpu, TrendingUp
 } from 'lucide-react';
 import { i18n } from '../services/i18n';
@@ -42,8 +42,6 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   const [copied, setCopied] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [shareCount, setShareCount] = useState(0);
-  const [isShareUnlocked, setIsShareUnlocked] = useState(false);
-  const [shareSimulating, setShareSimulating] = useState(false);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -59,7 +57,6 @@ export const UserCenter: React.FC<UserCenterProps> = ({
         if (membershipOnly) setActiveTab('membership');
         const savedCount = storage.getShareCount();
         setShareCount(savedCount);
-        if (savedCount >= 3) setIsShareUnlocked(true);
 
         const savedSettings = storage.getSettings();
         setSettings(savedSettings);
@@ -74,19 +71,6 @@ export const UserCenter: React.FC<UserCenterProps> = ({
     navigator.clipboard.writeText(user.id);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleSimulateShare = () => {
-      if(shareSimulating || shareCount >= 3) return;
-      setShareSimulating(true);
-      setTimeout(() => {
-          setShareSimulating(false);
-          const newCount = shareCount + 1;
-          setShareCount(newCount);
-          storage.saveShareCount(newCount);
-          backendClient.saveShareCount(newCount).catch((error) => console.warn("Share count sync failed", error));
-          if (newCount >= 3) setIsShareUnlocked(true);
-      }, 1500);
   };
 
   const handleToggleSetting = (key: 'notifications') => {
@@ -181,7 +165,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                       </div>
                       <h3 className="text-lg font-medium text-white mb-2 tracking-widest">助力解锁</h3>
                       <p className="text-sm text-white/50 leading-relaxed">
-                          分享给 3 位好友<br/>解锁 <span className="text-amber-500 font-medium">¥8.88/月</span> 特权
+                          邀请 3 位好友注册后<br/>解锁体验权益
                       </p>
                   </div>
 
@@ -193,23 +177,14 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                       ))}
                   </div>
 
-                  {!isShareUnlocked ? (
-                      <button 
-                        onClick={handleSimulateShare} disabled={shareSimulating}
-                        className="w-full py-3.5 bg-white text-black hover:bg-white/90 font-medium rounded-lg flex items-center justify-center gap-2 transition-all disabled:opacity-50"
-                      >
-                          {shareSimulating ? <div className="w-4 h-4 border-2 border-black/20 border-t-black rounded-full animate-spin" /> : <Send size={16} />}
-                          <span className="text-sm tracking-wide">{shareSimulating ? '检测中...' : '分享好友'}</span>
-                      </button>
-                  ) : (
-                      <button 
-                        onClick={() => { setShowShareModal(false); onRequirePayment(); }}
-                        className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 text-black font-medium rounded-lg flex items-center justify-center gap-2 transition-all shadow-[0_0_20px_rgba(245,158,11,0.2)] hover:shadow-[0_0_30px_rgba(245,158,11,0.4)]"
-                      >
-                          <Sparkles size={16} />
-                          <span className="text-sm tracking-wide">立即开通专属特权</span>
-                      </button>
-                  )}
+                  <button
+                    type="button"
+                    disabled
+                    className="w-full py-3.5 bg-white/10 text-white/35 font-medium rounded-lg flex items-center justify-center gap-2 border border-white/10 cursor-not-allowed"
+                  >
+                      <Sparkles size={16} />
+                      <span className="text-sm tracking-wide">邀请功能即将开放</span>
+                  </button>
               </div>
           </div>
       );
@@ -297,17 +272,16 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                <div className="flex items-center gap-1.5">
                   <Crown size={18} className="text-amber-400 drop-shadow-[0_0_6px_rgba(245,158,11,0.6)] animate-pulse" />
                   <h3 className="text-lg font-black bg-clip-text text-transparent bg-gradient-to-r from-amber-100 via-yellow-200 to-amber-400 tracking-wider">
-                     直通天眼 · 原价版
+                     终身会员
                   </h3>
                </div>
-               {/* 18.8 Super Striking Golden Price Badge */}
                <div className="flex flex-col items-end shrink-0 select-none">
                   <div className="flex items-baseline gap-0.5 text-amber-400 font-sans">
                      <span className="text-[10px] sm:text-xs font-black text-amber-300">¥</span>
-                     <span className="text-xl sm:text-2xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-amber-200 via-yellow-300 to-amber-500 drop-shadow-[0_0_12px_rgba(245,158,11,0.5)]">18.8</span>
-                     <span className="text-[8px] sm:text-[9.5px] text-amber-300/70 ml-0.5 font-bold font-serif">/终生</span>
+                     <span className="text-xl sm:text-2xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-amber-200 via-yellow-300 to-amber-500 drop-shadow-[0_0_12px_rgba(245,158,11,0.5)]">18.80</span>
+                     <span className="text-[8px] sm:text-[9.5px] text-amber-300/70 ml-0.5 font-bold font-serif">/终身</span>
                   </div>
-                  <span className="text-[6.5px] sm:text-[7.5px] text-amber-500/70 font-semibold tracking-widest uppercase bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/15">一键超值购</span>
+                  <span className="text-[6.5px] sm:text-[7.5px] text-amber-500/70 font-semibold tracking-widest uppercase bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/15">一次开通</span>
                </div>
             </div>
 
@@ -345,10 +319,10 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                    <div className="relative bg-[#0d0d11] px-4 py-3 sm:py-3.5 rounded-xl flex items-center justify-between backdrop-blur-xl">
                        <div className="flex flex-col items-start text-left">
                            <span className="text-xs sm:text-xs font-black bg-clip-text text-transparent bg-gradient-to-r from-amber-200 to-amber-400 tracking-wider">
-                               立即终生买断 · 开启高维天眼
+                               立即开通终身会员 · 开启高维天眼
                            </span>
                            <span className="text-[9px] text-amber-500/70 mt-0.5 tracking-wide">
-                               原价 ¥18.8 终生一键授权激活
+                               ¥18.80 / 终身，一次开通
                            </span>
                        </div>
                        <div className="w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-r from-amber-400 to-amber-600 shadow-[0_0_10px_rgba(245,158,11,0.3)] group-hover:shadow-[0_0_15px_rgba(245,158,11,0.6)] transition-all">
@@ -370,10 +344,10 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                    邀请好友 · 解锁体验版
                 </h3>
                 <div className="flex items-end gap-3 mb-6 relative z-10">
-                    <span className="text-3xl font-black text-indigo-400 tracking-tight">¥ 8.88</span>
+                    <span className="text-xs font-bold tracking-[0.22em] text-indigo-300 uppercase">Coming Soon</span>
                 </div>
                 <p className="text-sm text-white/60 leading-relaxed mb-6 font-light relative z-10">
-                    不想直接开通？转发给 3 位同行者，同样即可体验核心功能。拉满同频能量。<br/>
+                    邀请 3 位好友注册后，解锁体验权益。邀请系统、统计和权益发放即将开放。<br/>
                     <span className="block mt-4 text-xs text-white/50 font-mono bg-black/30 p-2 rounded-lg border border-white/5 inline-block">
                         助力进度: <span className="text-indigo-400 font-bold">{shareCount}/3</span>
                     </span>
@@ -383,7 +357,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                     onClick={() => setShowShareModal(true)}
                     className="relative z-10 w-full flex items-center justify-center gap-2 px-6 py-4 rounded-xl text-sm font-bold tracking-widest transition-all border border-indigo-500/30 bg-indigo-500/10 text-white hover:bg-indigo-500/20 hover:border-indigo-400 active:scale-95"
                 >
-                    {isShareUnlocked ? '立 即 领 取体验' : '分 享 邀 请 助 力'}
+                    查看邀请规则
                     <ChevronRight size={16} />
                 </button>
             </div>

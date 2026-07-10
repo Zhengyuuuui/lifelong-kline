@@ -61,7 +61,7 @@ const ActionPlanSheet: React.FC<Props> = ({ isOpen, onClose, data, isLoading }) 
         )}
 
         {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain p-6 smooth-scroll" style={{ touchAction: 'pan-y' }}>
             {isLoading ? (
                 <div className="flex flex-col items-center py-20 gap-4">
                     <div className="w-10 h-10 border-4 border-emerald-500/30 border-t-emerald-500 rounded-full animate-spin" />

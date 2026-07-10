@@ -11,13 +11,25 @@ interface InsightDockProps {
 }
 
 export const InsightDock: React.FC<InsightDockProps> = ({ insight, onAnalyze, onShowInsight, loading }) => {
+  const handleShowInsight = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onShowInsight?.();
+  };
+
+  const handleAnalyzeClick = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onAnalyze();
+  };
+
   return (
     <div 
       id="tour-dock"
-      className="w-full z-40 px-4 pb-4 pt-6 bg-gradient-to-t from-[#000000] via-[#000000]/80 to-transparent pointer-events-none"
+      className="relative w-full z-40 px-4 pb-4 pt-6 bg-gradient-to-t from-[#000000] via-[#000000]/80 to-transparent pointer-events-none"
     >
       <div className="max-w-md mx-auto pointer-events-auto">
-        <div className="bg-slate-900/70 backdrop-blur-2xl border border-white/10 rounded-[24px] p-4 shadow-[0_20px_50px_rgba(0,0,0,0.6)] flex items-center justify-between transition-all duration-300 ring-1 ring-white/5">
+        <div className="relative z-10 bg-slate-900/70 backdrop-blur-2xl border border-white/10 rounded-[24px] p-4 shadow-[0_20px_50px_rgba(0,0,0,0.6)] flex items-center justify-between transition-all duration-300 ring-1 ring-white/5">
           <div className="flex flex-col pl-2 flex-1 min-w-0 pr-4">
              {!insight ? (
                <>
@@ -46,7 +58,8 @@ export const InsightDock: React.FC<InsightDockProps> = ({ insight, onAnalyze, on
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {insight && onShowInsight && !loading && (
               <button
-                onClick={onShowInsight}
+                type="button"
+                onClick={handleShowInsight}
                 className="flex items-center gap-1.5 px-4 sm:px-6 py-3 sm:py-3.5 rounded-[16px] sm:rounded-[18px] font-bold text-xs active:scale-95 select-none transition-all duration-200 ease-out shadow-lg bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.15)] hover:shadow-[0_0_30px_rgba(255,255,255,0.25)] border border-transparent"
               >
                 <Sparkles size={14} fill="currentColor" />
@@ -54,7 +67,8 @@ export const InsightDock: React.FC<InsightDockProps> = ({ insight, onAnalyze, on
               </button>
             )}
             <button 
-              onClick={onAnalyze}
+              type="button"
+              onClick={handleAnalyzeClick}
               disabled={loading}
               className={`
                 flex items-center justify-center active:scale-95 select-none transition-all duration-200 ease-out shadow-lg

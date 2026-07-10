@@ -22,11 +22,11 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // server.ts
-var import_express8 = __toESM(require("express"), 1);
+var import_express9 = __toESM(require("express"), 1);
 var import_path = __toESM(require("path"), 1);
 var import_vite = require("vite");
 var import_dns = __toESM(require("dns"), 1);
-var import_node_crypto13 = __toESM(require("node:crypto"), 1);
+var import_node_crypto14 = __toESM(require("node:crypto"), 1);
 
 // server/aiProvider.ts
 var import_genai = require("@google/genai");
@@ -1359,6 +1359,10 @@ var normalizeDeviceId = (value) => {
   }
   return deviceId;
 };
+var normalizeOptionalInviteCode = (value) => {
+  const inviteCode = str(value, 64);
+  return inviteCode || void 0;
+};
 var validateSmsSendPayload = (body) => {
   if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
   const purpose = str(body.purpose, 32);
@@ -1382,7 +1386,8 @@ var validateSmsVerifyPayload = (body) => {
   return {
     challengeId,
     phone: normalizeMainlandChinaPhone(body.phone),
-    code
+    code,
+    inviteCode: normalizeOptionalInviteCode(body.inviteCode || body.invite_code || body.invite)
   };
 };
 var validatePhoneRegisterPayload = (body) => {
@@ -1397,7 +1402,8 @@ var validatePhoneRegisterPayload = (body) => {
     challengeId,
     phone: normalizeE164Phone(body.phone),
     code,
-    password: validateCredentialPassword(passwordValue(body.password), "password")
+    password: validateCredentialPassword(passwordValue(body.password), "password"),
+    inviteCode: normalizeOptionalInviteCode(body.inviteCode || body.invite_code || body.invite)
   };
 };
 var validateUserProfilePayload = (body) => {
@@ -3835,8 +3841,258 @@ var SmsService = class {
 };
 
 // server/postgres/registration.service.ts
+var import_node_crypto9 = require("node:crypto");
+
+// server/postgres/invite.service.ts
 var import_node_crypto8 = require("node:crypto");
+var INVITE_DISCOUNT_ELIGIBILITY_TYPE = "invite_3_users_lifetime_discount";
+var INVITE_DISCOUNT_TYPE = "invite_3_users";
+var INVITE_DISCOUNT_PRODUCT_ID = "life_kline_lifetime_invite";
+var INVITE_DISCOUNT_AMOUNT_CENTS = 880;
+var INVITE_DISCOUNT_ORIGINAL_AMOUNT_CENTS = 1880;
+var INVITE_DISCOUNT_REQUIRED_COUNT = 3;
 var normalizeIp5 = (value) => {
+  if (!value) return null;
+  return value.split(",")[0]?.trim() || null;
+};
+var normalizeInviteCode = (value) => String(value ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 32);
+var generateInviteCode = () => (0, import_node_crypto8.randomBytes)(6).toString("hex").toUpperCase();
+var InviteService = class {
+  async getMyInviteSummary(userId) {
+    return withTransaction(async (client) => {
+      const code = await this.getOrCreateCode(client, userId, {});
+      const eligibility = await this.ensureEligibility(client, userId);
+      const qualifiedCount = await this.countQualifiedReferrals(client, userId);
+      const publicSiteUrl = getBackendConfig().publicSiteUrl || "https://\u4EBA\u751F\u8BF4\u660E\u4E66.com";
+      return {
+        ok: true,
+        inviteCode: code.code,
+        inviteUrl: `${publicSiteUrl.replace(/\/$/, "")}?invite=${code.code}`,
+        qualifiedCount,
+        requiredCount: eligibility.required_count,
+        discountUnlocked: ["unlocked", "reserved"].includes(eligibility.status) && qualifiedCount >= eligibility.required_count,
+        eligibilityStatus: eligibility.status,
+        canCreateDiscountOrder: eligibility.status === "unlocked" && qualifiedCount >= eligibility.required_count && !eligibility.consumed_order_id,
+        discountProductId: INVITE_DISCOUNT_PRODUCT_ID,
+        discountAmountCents: INVITE_DISCOUNT_AMOUNT_CENTS,
+        originalAmountCents: INVITE_DISCOUNT_ORIGINAL_AMOUNT_CENTS
+      };
+    });
+  }
+  async createOrGetCode(userId, meta = {}) {
+    return withTransaction(async (client) => {
+      const code = await this.getOrCreateCode(client, userId, meta);
+      return { ok: true, inviteCode: code.code };
+    });
+  }
+  async recordReferralForNewUser(client, inviteeUserId, rawInviteCode, meta = {}) {
+    const code = normalizeInviteCode(rawInviteCode);
+    if (!code) return { recorded: false, reason: "missing_code" };
+    const inviteCodeResult = await client.query(
+      `
+        SELECT
+          invite_codes.id,
+          invite_codes.user_id,
+          invite_codes.code,
+          users.status AS inviter_status,
+          users.deleted_at::text AS inviter_deleted_at
+        FROM invite_codes
+        JOIN users ON users.id = invite_codes.user_id
+        WHERE invite_codes.code = $1 AND invite_codes.status = 'active'
+        LIMIT 1
+        FOR UPDATE OF invite_codes, users
+      `,
+      [code]
+    );
+    const inviteCode = inviteCodeResult.rows[0];
+    if (!inviteCode || inviteCode.inviter_status !== "active" || inviteCode.inviter_deleted_at) {
+      await this.audit(client, inviteeUserId, "invite.rejected", {
+        reason: "invalid_code"
+      }, meta);
+      return { recorded: false, reason: "invalid_code" };
+    }
+    if (inviteCode.user_id === inviteeUserId) {
+      await this.audit(client, inviteeUserId, "invite.rejected", {
+        reason: "self_invite"
+      }, meta);
+      return { recorded: false, reason: "self_invite" };
+    }
+    const inserted = await client.query(
+      `
+        INSERT INTO invite_referrals (
+          inviter_user_id,
+          invitee_user_id,
+          invite_code_id,
+          status,
+          qualified_at,
+          metadata
+        )
+        VALUES ($1, $2, $3, 'qualified', now(), $4::jsonb)
+        ON CONFLICT (invitee_user_id) DO NOTHING
+        RETURNING id
+      `,
+      [
+        inviteCode.user_id,
+        inviteeUserId,
+        inviteCode.id,
+        JSON.stringify({ source: "phone_registration" })
+      ]
+    );
+    if (!inserted.rows[0]) {
+      await this.audit(client, inviteeUserId, "invite.rejected", {
+        reason: "invitee_already_counted"
+      }, meta);
+      return { recorded: false, reason: "invitee_already_counted" };
+    }
+    const qualifiedCount = await this.countQualifiedReferrals(client, inviteCode.user_id);
+    const eligibility = await this.ensureEligibility(client, inviteCode.user_id);
+    const unlocked = qualifiedCount >= eligibility.required_count;
+    await client.query(
+      `
+        UPDATE user_discount_eligibilities
+        SET
+          current_count = $2,
+          status = CASE
+            WHEN status IN ('consumed', 'reserved', 'revoked') THEN status
+            WHEN $3::boolean THEN 'unlocked'
+            ELSE 'locked'
+          END,
+          unlocked_at = CASE
+            WHEN unlocked_at IS NULL AND $3::boolean THEN now()
+            ELSE unlocked_at
+          END
+        WHERE id = $1
+      `,
+      [eligibility.id, qualifiedCount, unlocked]
+    );
+    await this.audit(client, inviteCode.user_id, "invite.referral_qualified", {
+      referralId: inserted.rows[0].id,
+      inviteCodeId: inviteCode.id,
+      qualifiedCount,
+      requiredCount: eligibility.required_count,
+      unlocked
+    }, meta);
+    return { recorded: true, inviterUserId: inviteCode.user_id, qualifiedCount };
+  }
+  async ensureEligibility(client, userId) {
+    const result = await client.query(
+      `
+        INSERT INTO user_discount_eligibilities (
+          user_id,
+          eligibility_type,
+          status,
+          required_count,
+          current_count
+        )
+        VALUES ($1, $2, 'locked', $3, 0)
+        ON CONFLICT (user_id, eligibility_type)
+        DO UPDATE SET user_id = EXCLUDED.user_id
+        RETURNING
+          id,
+          status,
+          required_count,
+          current_count,
+          unlocked_at::text,
+          reserved_order_id::text,
+          consumed_order_id::text
+      `,
+      [userId, INVITE_DISCOUNT_ELIGIBILITY_TYPE, INVITE_DISCOUNT_REQUIRED_COUNT]
+    );
+    return result.rows[0];
+  }
+  async countQualifiedReferrals(client, userId) {
+    const result = await client.query(
+      `
+        SELECT count(*)::text AS count
+        FROM invite_referrals
+        WHERE inviter_user_id = $1 AND status = 'qualified'
+      `,
+      [userId]
+    );
+    return Number(result.rows[0]?.count || 0);
+  }
+  async getOrCreateCode(client, userId, meta) {
+    await client.query(
+      "SELECT id FROM users WHERE id = $1 AND status = 'active' AND deleted_at IS NULL FOR UPDATE",
+      [userId]
+    );
+    const existing = await client.query(
+      `
+        SELECT id, user_id, code
+        FROM invite_codes
+        WHERE user_id = $1 AND status = 'active'
+        LIMIT 1
+      `,
+      [userId]
+    );
+    if (existing.rows[0]) {
+      await this.audit(client, userId, "invite.code_reused", {
+        inviteCodeId: existing.rows[0].id
+      }, meta);
+      return existing.rows[0];
+    }
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const code = generateInviteCode();
+      try {
+        const inserted = await client.query(
+          `
+            INSERT INTO invite_codes (user_id, code, status)
+            VALUES ($1, $2, 'active')
+            RETURNING id, user_id, code
+          `,
+          [userId, code]
+        );
+        await this.audit(client, userId, "invite.code_created", {
+          inviteCodeId: inserted.rows[0].id
+        }, meta);
+        return inserted.rows[0];
+      } catch (error) {
+        if (error.code !== "23505" || attempt === 4) {
+          throw error;
+        }
+      }
+    }
+    throw new HttpError(500, "Invite code generation failed");
+  }
+  async getEligibilityForUpdate(client, userId) {
+    await this.ensureEligibility(client, userId);
+    const result = await client.query(
+      `
+        SELECT
+          id,
+          status,
+          required_count,
+          current_count,
+          unlocked_at::text,
+          reserved_order_id::text,
+          consumed_order_id::text
+        FROM user_discount_eligibilities
+        WHERE user_id = $1 AND eligibility_type = $2
+        FOR UPDATE
+      `,
+      [userId, INVITE_DISCOUNT_ELIGIBILITY_TYPE]
+    );
+    return result.rows[0];
+  }
+  async audit(client, userId, eventType, metadata, meta = {}) {
+    await client.query(
+      `
+        INSERT INTO audit_events (user_id, event_type, metadata, ip_address, user_agent)
+        VALUES ($1, $2, $3::jsonb, $4, $5)
+      `,
+      [
+        userId,
+        eventType,
+        JSON.stringify(metadata),
+        normalizeIp5(meta.ipAddress),
+        meta.userAgent || null
+      ]
+    );
+  }
+};
+
+// server/postgres/registration.service.ts
+var normalizeIp6 = (value) => {
   if (!value) return null;
   const first = value.split(",")[0]?.trim();
   return first || null;
@@ -3844,12 +4100,13 @@ var normalizeIp5 = (value) => {
 var hmacHex2 = (domain, value) => {
   const config = getBackendConfig();
   const secret = config.smsCodeHmacSecret || config.jwtAccessSecret;
-  return (0, import_node_crypto8.createHmac)("sha256", secret).update(`${domain}:${value}`).digest("hex");
+  return (0, import_node_crypto9.createHmac)("sha256", secret).update(`${domain}:${value}`).digest("hex");
 };
 var dayWindowSql = "date_trunc('day', now())";
 var RegistrationService = class {
   constructor() {
     this.authService = new AuthService();
+    this.inviteService = new InviteService();
   }
   async registerPhone(payload, meta) {
     const normalizedPhone = normalizeE164Phone(payload.phone);
@@ -4010,6 +4267,12 @@ var RegistrationService = class {
       await client.query(
         "UPDATE auth_challenges SET consumed_at = now() WHERE id = $1",
         [challenge.id]
+      );
+      await this.inviteService.recordReferralForNewUser(
+        client,
+        userId,
+        payload.inviteCode,
+        meta
       );
       await this.audit(client, userId, "register_success", {
         challengeId: challenge.id,
@@ -4186,6 +4449,14 @@ var RegistrationService = class {
         "UPDATE auth_challenges SET consumed_at = now() WHERE id = $1",
         [challenge.id]
       );
+      if (createdUser) {
+        await this.inviteService.recordReferralForNewUser(
+          client,
+          userId,
+          payload.inviteCode,
+          meta
+        );
+      }
       await this.audit(
         client,
         userId,
@@ -4230,7 +4501,7 @@ var RegistrationService = class {
       {
         type: "ip",
         limit: config.smsAuthRegisterIpDailyLimit,
-        bucketKey: `sms-auth-register-ip:${hmacHex2("sms-auth-register-ip:v1", normalizeIp5(meta.ipAddress) || "unknown")}`
+        bucketKey: `sms-auth-register-ip:${hmacHex2("sms-auth-register-ip:v1", normalizeIp6(meta.ipAddress) || "unknown")}`
       },
       {
         type: "device",
@@ -4278,7 +4549,7 @@ var RegistrationService = class {
         userId,
         eventType,
         JSON.stringify(metadata),
-        normalizeIp5(meta.ipAddress),
+        normalizeIp6(meta.ipAddress),
         meta.userAgent || null
       ]
     );
@@ -4514,14 +4785,43 @@ var createPostgresHealthRouter = () => {
   return router;
 };
 
-// server/postgres/payment.controller.ts
+// server/postgres/invite.controller.ts
 var import_express4 = require("express");
+var getRequestMeta2 = (req) => ({
+  ipAddress: req.ip || req.socket.remoteAddress || "",
+  userAgent: req.headers["user-agent"] || null
+});
+var createInviteRouter = () => {
+  const router = (0, import_express4.Router)();
+  const inviteService = new InviteService();
+  router.use(requirePostgresAuth);
+  router.get(
+    "/me",
+    createPostgresRateLimiter({ routeKey: "invites.me", limit: 120, windowMs: 6e4 }),
+    asyncHandler(async (req, res) => {
+      const result = await inviteService.getMyInviteSummary(req.pgAuth.userId);
+      res.json(result);
+    })
+  );
+  router.post(
+    "/code",
+    createPostgresRateLimiter({ routeKey: "invites.code", limit: 20, windowMs: 6e4 }),
+    asyncHandler(async (req, res) => {
+      const result = await inviteService.createOrGetCode(req.pgAuth.userId, getRequestMeta2(req));
+      res.json(result);
+    })
+  );
+  return router;
+};
+
+// server/postgres/payment.controller.ts
+var import_express5 = require("express");
 
 // server/postgres/payment.service.ts
-var import_node_crypto9 = require("node:crypto");
+var import_node_crypto10 = require("node:crypto");
 var import_node_fs2 = require("node:fs");
 var import_app_store_server_library = require("@apple/app-store-server-library");
-var sha256Hex2 = (value) => (0, import_node_crypto9.createHash)("sha256").update(value).digest("hex");
+var sha256Hex2 = (value) => (0, import_node_crypto10.createHash)("sha256").update(value).digest("hex");
 var json = (value) => JSON.stringify(value ?? {});
 var parsePemCertificates = (content) => {
   const text = Buffer.isBuffer(content) ? content.toString("utf8") : content;
@@ -4797,7 +5097,7 @@ var PaymentService = class {
     const productId = payload.productId || config.appleIapProductIds[0] || "com.lifekline.lifetime";
     const purchase = {
       productId,
-      transactionId: payload.transactionId || `mock_${(0, import_node_crypto9.randomUUID)()}`,
+      transactionId: payload.transactionId || `mock_${(0, import_node_crypto10.randomUUID)()}`,
       originalTransactionId: null,
       purchaseDate: (/* @__PURE__ */ new Date()).toISOString(),
       expiresAt: productId.toLowerCase().includes("month") ? new Date(Date.now() + 31 * 24 * 60 * 60 * 1e3).toISOString() : null,
@@ -5032,7 +5332,7 @@ var PaymentService = class {
 
 // server/postgres/payment.controller.ts
 var createPaymentRouter = () => {
-  const router = (0, import_express4.Router)();
+  const router = (0, import_express5.Router)();
   const paymentService = new PaymentService();
   router.use(requirePostgresAuth);
   router.post(
@@ -5048,7 +5348,7 @@ var createPaymentRouter = () => {
 };
 
 // server/postgres/user.controller.ts
-var import_express5 = require("express");
+var import_express6 = require("express");
 
 // server/postgres/user.service.ts
 var mapUser2 = (row) => ({
@@ -5414,7 +5714,7 @@ var UserService = class {
 
 // server/postgres/user.controller.ts
 var createUserRouter = () => {
-  const router = (0, import_express5.Router)();
+  const router = (0, import_express6.Router)();
   const authService2 = new AuthService();
   const userService = new UserService();
   router.use(requirePostgresAuth);
@@ -5494,13 +5794,13 @@ var createUserRouter = () => {
 };
 
 // server/postgres/webhook.controller.ts
-var import_express6 = require("express");
+var import_express7 = require("express");
 
 // server/postgres/appleWebhook.service.ts
-var import_node_crypto10 = require("node:crypto");
+var import_node_crypto11 = require("node:crypto");
 var import_node_fs3 = require("node:fs");
 var import_app_store_server_library2 = require("@apple/app-store-server-library");
-var sha256Hex3 = (value) => (0, import_node_crypto10.createHash)("sha256").update(value).digest("hex");
+var sha256Hex3 = (value) => (0, import_node_crypto11.createHash)("sha256").update(value).digest("hex");
 var json2 = (value) => JSON.stringify(value ?? {});
 var toIso = (value) => {
   if (!value || !Number.isFinite(value)) return null;
@@ -5854,7 +6154,7 @@ var AppleWebhookService = class {
 
 // server/postgres/webhook.controller.ts
 var createWebhookRouter = () => {
-  const router = (0, import_express6.Router)();
+  const router = (0, import_express7.Router)();
   const appleWebhookService = new AppleWebhookService();
   router.post(
     "/apple",
@@ -5869,13 +6169,13 @@ var createWebhookRouter = () => {
 };
 
 // server/postgres/xunhupay.controller.ts
-var import_express7 = __toESM(require("express"), 1);
+var import_express8 = __toESM(require("express"), 1);
 
 // server/postgres/xunhupay.service.ts
-var import_node_crypto12 = require("node:crypto");
+var import_node_crypto13 = require("node:crypto");
 
 // server/postgres/xunhupay.sign.ts
-var import_node_crypto11 = require("node:crypto");
+var import_node_crypto12 = require("node:crypto");
 var HASH_RE = /^[a-f0-9]{32}$/;
 var TOTAL_FEE_RE = /^(0|[1-9]\d{0,13})\.\d{2}$/;
 var normalizeValue = (value) => {
@@ -5911,7 +6211,7 @@ var totalFeeToAmountCents = (totalFee) => {
 };
 var buildXunhuHash = (payload, appSecret) => {
   if (!appSecret) throw new Error("Xunhupay app secret is required");
-  return (0, import_node_crypto11.createHash)("md5").update(`${canonicalizeXunhuPayload(payload)}${appSecret}`).digest("hex");
+  return (0, import_node_crypto12.createHash)("md5").update(`${canonicalizeXunhuPayload(payload)}${appSecret}`).digest("hex");
 };
 var verifyXunhuHash = (payload, appSecret) => {
   const receivedHash = normalizeValue(payload.hash).toLowerCase();
@@ -5919,9 +6219,9 @@ var verifyXunhuHash = (payload, appSecret) => {
   const expectedHash = buildXunhuHash(payload, appSecret);
   const received = Buffer.from(receivedHash, "utf8");
   const expected = Buffer.from(expectedHash, "utf8");
-  return received.length === expected.length && (0, import_node_crypto11.timingSafeEqual)(received, expected);
+  return received.length === expected.length && (0, import_node_crypto12.timingSafeEqual)(received, expected);
 };
-var createNonceStr = () => (0, import_node_crypto11.randomBytes)(16).toString("hex");
+var createNonceStr = () => (0, import_node_crypto12.randomBytes)(16).toString("hex");
 var createMerchantOrderNo = () => {
   const now = /* @__PURE__ */ new Date();
   const stamp = [
@@ -5933,7 +6233,7 @@ var createMerchantOrderNo = () => {
     String(now.getSeconds()).padStart(2, "0"),
     String(now.getMilliseconds()).padStart(3, "0")
   ].join("");
-  return `LK${stamp}${(0, import_node_crypto11.randomUUID)().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
+  return `LK${stamp}${(0, import_node_crypto12.randomUUID)().replace(/-/g, "").slice(0, 10).toUpperCase()}`;
 };
 
 // server/postgres/xunhupay.service.ts
@@ -5959,6 +6259,17 @@ var PRODUCTS = [
     title: "\u4EBA\u751FK\u7EBF\u7EC8\u8EAB\u6743\u9650",
     plan: "lifetime",
     durationDays: null
+  },
+  {
+    productId: INVITE_DISCOUNT_PRODUCT_ID,
+    aliases: ["life_kline_lifetime_invite_880"],
+    amountCents: 880,
+    currency: "CNY",
+    title: "\u4EBA\u751FK\u7EBF\u9080\u8BF7\u4E13\u4EAB\u7EC8\u8EAB\u4F1A\u5458",
+    plan: "lifetime",
+    durationDays: null,
+    originalAmountCents: INVITE_DISCOUNT_ORIGINAL_AMOUNT_CENTS,
+    discountType: INVITE_DISCOUNT_TYPE
   }
 ];
 var json3 = (value) => JSON.stringify(value ?? {});
@@ -5967,7 +6278,7 @@ var payloadHash = (payload) => {
     acc[key] = payload[key];
     return acc;
   }, {});
-  return (0, import_node_crypto12.createHash)("sha256").update(json3(normalized)).digest("hex");
+  return (0, import_node_crypto13.createHash)("sha256").update(json3(normalized)).digest("hex");
 };
 var str2 = (value, max = 255) => String(value ?? "").trim().slice(0, max);
 var productFor = (productId) => PRODUCTS.find((product) => product.productId === productId || product.aliases.includes(productId));
@@ -6011,6 +6322,9 @@ var parseGatewayResponse = (text, contentType) => {
   }
 };
 var XunhupayService = class {
+  constructor() {
+    this.inviteService = new InviteService();
+  }
   async createPaymentOrder(userId, rawPayload) {
     const config = getBackendConfig();
     if (config.paymentsProvider !== XUNHUPAY_PROVIDER) {
@@ -6019,7 +6333,7 @@ var XunhupayService = class {
     const { product, payType } = validateCreatePayload(rawPayload);
     const merchantOrderNo = createMerchantOrderNo();
     const totalFee = amountCentsToTotalFee(product.amountCents);
-    const order = await this.insertPendingOrder(userId, product, merchantOrderNo, payType);
+    const order = product.productId === INVITE_DISCOUNT_PRODUCT_ID ? await this.insertInviteDiscountPendingOrder(userId, product, merchantOrderNo, payType) : await this.insertPendingOrder(userId, product, merchantOrderNo, payType);
     if (config.paymentsMode !== "live") {
       await this.storeGatewayResult(order.id, {
         mode: "mock",
@@ -6109,6 +6423,7 @@ var XunhupayService = class {
       }
       await this.markOrderPaid(client, order, formPayload, hash2);
       await this.upsertMembership(client, order.user_id, order.id, order.product_id);
+      await this.consumeInviteDiscountIfNeeded(client, order);
       await this.markCallback(callbackId, "processed", true, void 0, client);
       await this.insertAuditEvent(client, order.user_id, "payment.xunhupay_paid", {
         orderId: order.id,
@@ -6172,9 +6487,8 @@ var XunhupayService = class {
       } : null
     };
   }
-  async insertPendingOrder(userId, product, merchantOrderNo, payType) {
-    const result = await query(
-      `
+  async insertPendingOrder(userId, product, merchantOrderNo, payType, client, discount) {
+    const sql = `
         INSERT INTO orders (
           user_id,
           merchant_order_no,
@@ -6184,35 +6498,65 @@ var XunhupayService = class {
           environment,
           amount_cents,
           currency,
-          raw_receipt
+          raw_receipt,
+          eligibility_id,
+          original_amount_cents,
+          discount_type
         )
-        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8::jsonb)
-        RETURNING id, user_id, merchant_order_no, product_id, payment_status, amount_cents, currency, paid_at::text
-      `,
-      [
-        userId,
-        merchantOrderNo,
-        product.productId,
-        XUNHUPAY_PROVIDER,
-        getBackendConfig().appEnv,
-        product.amountCents,
-        product.currency,
-        json3({
-          create: {
-            payType,
-            title: product.title,
-            amountCents: product.amountCents
-          }
-        })
-      ]
-    );
-    await query(
-      `
+        VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8::jsonb, $9::uuid, $10, $11)
+        RETURNING
+          id,
+          user_id,
+          merchant_order_no,
+          product_id,
+          payment_status,
+          amount_cents,
+          currency,
+          paid_at::text,
+          eligibility_id::text,
+          discount_type
+      `;
+    const values = [
+      userId,
+      merchantOrderNo,
+      product.productId,
+      XUNHUPAY_PROVIDER,
+      getBackendConfig().appEnv,
+      product.amountCents,
+      product.currency,
+      json3({
+        create: {
+          payType,
+          title: product.title,
+          amountCents: product.amountCents,
+          originalAmountCents: discount?.originalAmountCents || void 0,
+          discountType: discount?.discountType || void 0
+        }
+      }),
+      discount?.eligibilityId || null,
+      discount?.originalAmountCents || null,
+      discount?.discountType || null
+    ];
+    const result = client ? await client.query(sql, values) : await query(sql, values);
+    const auditSql = `
         INSERT INTO audit_events (user_id, event_type, metadata)
         VALUES ($1, 'payment.xunhupay_order_created', $2::jsonb)
-      `,
-      [userId, json3({ orderId: result.rows[0].id, merchantOrderNo, productId: product.productId, payType })]
-    );
+      `;
+    const auditValues = [
+      userId,
+      json3({
+        orderId: result.rows[0].id,
+        merchantOrderNo,
+        productId: product.productId,
+        payType,
+        discountType: discount?.discountType || void 0
+      })
+    ];
+    if (client) {
+      await client.query(auditSql, auditValues);
+    } else {
+      await query(auditSql, auditValues);
+    }
     return result.rows[0];
   }
   buildCreateRequest(product, payType, merchantOrderNo, totalFee) {
@@ -6344,6 +6688,7 @@ var XunhupayService = class {
     const result = await client.query(
       `
         SELECT id, user_id, merchant_order_no, product_id, payment_status, amount_cents, currency, paid_at::text
+          , eligibility_id::text, discount_type
         FROM orders
         WHERE merchant_order_no = $1
           AND payment_provider = $2
@@ -6352,6 +6697,88 @@ var XunhupayService = class {
       [merchantOrderNo, XUNHUPAY_PROVIDER]
     );
     return result.rows[0] || null;
+  }
+  async insertInviteDiscountPendingOrder(userId, product, merchantOrderNo, payType) {
+    return withTransaction(async (client) => {
+      const eligibility = await this.inviteService.getEligibilityForUpdate(client, userId);
+      const qualifiedCount = await this.inviteService.countQualifiedReferrals(client, userId);
+      if (eligibility.status !== "unlocked" || qualifiedCount < eligibility.required_count || eligibility.consumed_order_id) {
+        throw new HttpError(403, "Invite discount is not unlocked");
+      }
+      const activeLifetime = await client.query(
+        `
+          SELECT id
+          FROM memberships
+          WHERE user_id = $1
+            AND status = 'active'
+            AND expires_at IS NULL
+          LIMIT 1
+        `,
+        [userId]
+      );
+      if (activeLifetime.rows[0]) {
+        throw new HttpError(403, "Invite discount is not available");
+      }
+      const successDiscount = await client.query(
+        `
+          SELECT id
+          FROM orders
+          WHERE user_id = $1
+            AND payment_provider = $2
+            AND product_id = $3
+            AND payment_status = 'success'
+          LIMIT 1
+        `,
+        [userId, XUNHUPAY_PROVIDER, INVITE_DISCOUNT_PRODUCT_ID]
+      );
+      if (successDiscount.rows[0]) {
+        throw new HttpError(403, "Invite discount is not available");
+      }
+      const existingPending = await client.query(
+        `
+          SELECT id
+          FROM orders
+          WHERE eligibility_id = $1::uuid
+            AND payment_status = 'pending'
+            AND payment_provider = $2
+          LIMIT 1
+        `,
+        [eligibility.id, XUNHUPAY_PROVIDER]
+      );
+      if (existingPending.rows[0]) {
+        throw new HttpError(409, "Invite discount order already pending");
+      }
+      const order = await this.insertPendingOrder(
+        userId,
+        product,
+        merchantOrderNo,
+        payType,
+        client,
+        {
+          eligibilityId: eligibility.id,
+          originalAmountCents: product.originalAmountCents || null,
+          discountType: product.discountType || null
+        }
+      );
+      await client.query(
+        `
+          UPDATE user_discount_eligibilities
+          SET status = 'reserved', reserved_order_id = $2::uuid
+          WHERE id = $1::uuid
+        `,
+        [eligibility.id, order.id]
+      );
+      await this.insertAuditEvent(client, userId, "invite.discount_order_created", {
+        orderId: order.id,
+        eligibilityId: eligibility.id,
+        productId: product.productId
+      });
+      await this.insertAuditEvent(client, userId, "invite.discount_reserved", {
+        orderId: order.id,
+        eligibilityId: eligibility.id
+      });
+      return order;
+    });
   }
   async recordVerifiedNotify(client, order, formPayload, hash2) {
     await client.query(
@@ -6470,6 +6897,27 @@ var XunhupayService = class {
       params
     );
   }
+  async consumeInviteDiscountIfNeeded(client, order) {
+    if (order.product_id !== INVITE_DISCOUNT_PRODUCT_ID || order.discount_type !== INVITE_DISCOUNT_TYPE || !order.eligibility_id) {
+      return;
+    }
+    const result = await client.query(
+      `
+        UPDATE user_discount_eligibilities
+        SET status = 'consumed', consumed_order_id = $2::uuid
+        WHERE id = $1::uuid
+          AND status <> 'consumed'
+        RETURNING id
+      `,
+      [order.eligibility_id, order.id]
+    );
+    if (result.rows[0]) {
+      await this.insertAuditEvent(client, order.user_id, "invite.discount_consumed", {
+        orderId: order.id,
+        eligibilityId: order.eligibility_id
+      });
+    }
+  }
   async insertAuditEvent(client, userId, eventType, metadata) {
     await client.query(
       `
@@ -6483,11 +6931,11 @@ var XunhupayService = class {
 
 // server/postgres/xunhupay.controller.ts
 var createXunhupayRouter = () => {
-  const router = (0, import_express7.Router)();
+  const router = (0, import_express8.Router)();
   const xunhupayService = new XunhupayService();
   router.post(
     "/xunhupay/notify",
-    import_express7.default.urlencoded({ extended: false }),
+    import_express8.default.urlencoded({ extended: false }),
     createPostgresRateLimiter({ routeKey: "payment.xunhupay_notify", limit: 240, windowMs: 6e4 }),
     asyncHandler(async (req, res) => {
       await xunhupayService.handleNotify(req.body || {});
@@ -6519,6 +6967,7 @@ var createXunhupayRouter = () => {
 var registerPostgresApiRoutes = (app) => {
   app.use("/api/auth", createAuthRouter());
   app.use("/api/user", createUserRouter());
+  app.use("/api/invites", createInviteRouter());
   app.use("/api/ai", createAiRouter());
   app.use("/api/payment", createXunhupayRouter());
   app.use("/api/payment", createPaymentRouter());
@@ -6537,7 +6986,7 @@ var postgresApiErrorHandler = (error, _req, res, next) => {
 // server.ts
 import_dns.default.setDefaultResultOrder("ipv4first");
 async function startServer() {
-  const app = (0, import_express8.default)();
+  const app = (0, import_express9.default)();
   getBackendConfig();
   const PORT = Number(process.env.PORT || 3e3);
   const HOST = process.env.HOST || (process.env.NODE_ENV === "production" ? "127.0.0.1" : "0.0.0.0");
@@ -6599,7 +7048,7 @@ async function startServer() {
   app.disable("x-powered-by");
   app.use(securityHeaders);
   app.use(corsMiddleware);
-  app.use(import_express8.default.json({ limit: "20mb" }));
+  app.use(import_express9.default.json({ limit: "20mb" }));
   app.use(resolveAuth(database));
   app.use("/api", createRateLimiter(Number(process.env.API_RATE_LIMIT || 240), 6e4));
   registerBusinessRoutes(app, database);
@@ -6623,7 +7072,7 @@ async function startServer() {
     const startedAt = Date.now();
     const { model, contents, config } = req.body;
     const primaryModel = model || "gemini-3.5-flash";
-    const promptHash = import_node_crypto13.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
+    const promptHash = import_node_crypto14.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
     if (!isAiProviderConfigured(aiProviderConfig)) {
       database.logAiRequest({
         userId: getAuthUserId(req) ?? null,
@@ -6713,7 +7162,7 @@ async function startServer() {
     const startedAt = Date.now();
     const { model, contents, config } = req.body;
     const primaryModel = model || "gemini-3.5-flash";
-    const promptHash = import_node_crypto13.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
+    const promptHash = import_node_crypto14.default.createHash("sha256").update(JSON.stringify(contents ?? "")).digest("hex");
     if (!isAiProviderConfigured(aiProviderConfig)) {
       database.logAiRequest({
         userId: getAuthUserId(req) ?? null,
@@ -6796,7 +7245,7 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = import_path.default.join(process.cwd(), "dist");
-    app.use(import_express8.default.static(distPath));
+    app.use(import_express9.default.static(distPath));
     app.get("*all", (req, res) => {
       res.sendFile(import_path.default.join(distPath, "index.html"));
     });

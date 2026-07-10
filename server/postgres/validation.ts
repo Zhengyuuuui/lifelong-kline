@@ -55,6 +55,7 @@ export interface SmsVerifyPayload {
   challengeId: string;
   phone: string;
   code: string;
+  inviteCode?: string;
 }
 
 export interface PhoneRegisterPayload {
@@ -62,6 +63,7 @@ export interface PhoneRegisterPayload {
   phone: string;
   code: string;
   password: string;
+  inviteCode?: string;
 }
 
 export interface UserProfilePayload {
@@ -222,6 +224,11 @@ const normalizeDeviceId = (value: unknown) => {
   return deviceId;
 };
 
+const normalizeOptionalInviteCode = (value: unknown) => {
+  const inviteCode = str(value, 64);
+  return inviteCode || undefined;
+};
+
 export const validateSmsSendPayload = (body: unknown): SmsSendPayload => {
   if (!isObject(body)) throw new ValidationError({ body: "Expected JSON object" });
   const purpose = str(body.purpose, 32) as SmsPurpose;
@@ -247,6 +254,7 @@ export const validateSmsVerifyPayload = (body: unknown): SmsVerifyPayload => {
     challengeId,
     phone: normalizeMainlandChinaPhone(body.phone),
     code,
+    inviteCode: normalizeOptionalInviteCode(body.inviteCode || body.invite_code || body.invite),
   };
 };
 
@@ -263,6 +271,7 @@ export const validatePhoneRegisterPayload = (body: unknown): PhoneRegisterPayloa
     phone: normalizeE164Phone(body.phone),
     code,
     password: validateCredentialPassword(passwordValue(body.password), "password"),
+    inviteCode: normalizeOptionalInviteCode(body.inviteCode || body.invite_code || body.invite),
   };
 };
 

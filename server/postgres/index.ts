@@ -2,6 +2,7 @@ import type { Express, NextFunction, Request, Response } from "express";
 import { createAiRouter } from "./ai.controller";
 import { createAuthRouter } from "./auth.controller";
 import { createPostgresHealthRouter } from "./health.controller";
+import { createInviteRouter } from "./invite.controller";
 import { createPaymentRouter } from "./payment.controller";
 import { createUserRouter } from "./user.controller";
 import { createWebhookRouter } from "./webhook.controller";
@@ -11,6 +12,7 @@ import { HttpError, toPublicError } from "./errors";
 export const registerPostgresApiRoutes = (app: Express) => {
   app.use("/api/auth", createAuthRouter());
   app.use("/api/user", createUserRouter());
+  app.use("/api/invites", createInviteRouter());
   app.use("/api/ai", createAiRouter());
   app.use("/api/payment", createXunhupayRouter());
   app.use("/api/payment", createPaymentRouter());

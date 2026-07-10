@@ -50,12 +50,8 @@ import { KlinePoint, TimeRange, SegmentInsight, UserInputProfile, UserBaziMeta, 
 import { Compass, Sparkles, Activity, Globe, Play, Wind, LayoutDashboard, Clock, BookOpen, User, TrendingUp, Crosshair, Zap, Lock, Flame, Settings, X, Users, CheckCircle2, HelpCircle } from 'lucide-react';
 import { i18n, LANGUAGES, LangCode } from './services/i18n';
 
-const getAppleIapProductId = (planType?: PaymentSuccessDetails['planType']) => {
-    if (planType === 'lifetime') {
-        return import.meta.env.VITE_APPLE_IAP_LIFETIME_PRODUCT_ID || 'com.lifekline.lifetime';
-    }
-    return import.meta.env.VITE_APPLE_IAP_MONTHLY_PRODUCT_ID || 'com.lifekline.monthly';
-};
+const getAppleIapProductId = (_planType?: PaymentSuccessDetails['planType']) =>
+    import.meta.env.VITE_APPLE_IAP_LIFETIME_PRODUCT_ID || 'com.lifekline.lifetime';
 
 const LIFE_BOOK_CACHE_KEYS = ['life_book_data_v2', 'life_book_data'] as const;
 const getScopedLifeBookCacheKeys = (userId?: string | null) =>

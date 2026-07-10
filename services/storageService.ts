@@ -208,12 +208,12 @@ export const storage = {
     try {
       const s = localStorage.getItem(KEYS.ACCOUNT_BINDINGS);
       if (!s || s === 'undefined' || s === 'null') {
-        return { phone: '138****8888', wechat: false };
+        return { phone: null, wechat: false };
       }
       return JSON.parse(s);
     } catch (e) {
       console.warn("Storage getBindings failed", e);
-      return { phone: '138****8888', wechat: false };
+      return { phone: null, wechat: false };
     }
   },
 

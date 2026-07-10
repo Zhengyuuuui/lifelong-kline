@@ -4,6 +4,7 @@ import { AuthService, type RequestMeta } from "./auth.service";
 import { withTransaction } from "./db";
 import { getBackendConfig } from "./env";
 import { HttpError } from "./errors";
+import { InviteService } from "./invite.service";
 import {
   PASSWORD_ALGORITHM,
   PASSWORD_ALGORITHM_VERSION,
@@ -54,6 +55,7 @@ const dayWindowSql = "date_trunc('day', now())";
 
 export class RegistrationService {
   private readonly authService = new AuthService();
+  private readonly inviteService = new InviteService();
 
   async registerPhone(payload: PhoneRegisterPayload, meta: RequestMeta) {
     const normalizedPhone = normalizeE164Phone(payload.phone);
@@ -222,6 +224,12 @@ export class RegistrationService {
       await client.query(
         "UPDATE auth_challenges SET consumed_at = now() WHERE id = $1",
         [challenge.id]
+      );
+      await this.inviteService.recordReferralForNewUser(
+        client,
+        userId,
+        payload.inviteCode,
+        meta
       );
       await this.audit(client, userId, "register_success", {
         challengeId: challenge.id,
@@ -419,6 +427,14 @@ export class RegistrationService {
         "UPDATE auth_challenges SET consumed_at = now() WHERE id = $1",
         [challenge.id]
       );
+      if (createdUser) {
+        await this.inviteService.recordReferralForNewUser(
+          client,
+          userId,
+          payload.inviteCode,
+          meta
+        );
+      }
       await this.audit(
         client,
         userId,

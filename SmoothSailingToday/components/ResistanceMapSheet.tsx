@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, ArrowRight, AlertTriangle, CheckCircle2, GitBranch, Play, RefreshCw, AlertCircle, Layout, Type, Loader2, FileText, ChevronDown } from 'lucide-react';
 import { FlowPath, FlowNode, AlternativeRoute, UserProfile, DailyFortuneOverview } from '../types';
 import { analyzeResistanceWithAI } from '../services/ai';
@@ -105,18 +106,18 @@ const ResistanceMapSheet: React.FC<Props> = ({ isOpen, onClose, onSelectAlternat
     }
   };
 
-  return (
+  const sheet = (
     <>
         {/* Backdrop */}
         <div 
-            className={`fixed inset-0 bg-black/70 backdrop-blur-md z-[60] transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+            className={`fixed inset-0 bg-black/70 backdrop-blur-md z-[130] transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
             onClick={onClose}
         />
 
         {/* Sheet Container with Optimized Animation */}
         <div 
             style={{ willChange: 'transform' }}
-            className={`fixed inset-x-0 bottom-0 z-[60] w-full h-[90vh] bg-[#0F111A] rounded-t-[36px] flex flex-col shadow-[0_-20px_60px_rgba(0,0,0,0.9)] transition-transform duration-500 ease-sheet-spring border-t border-white/10 ${
+            className={`fixed inset-x-0 bottom-0 z-[140] w-full h-[90vh] min-h-0 overflow-hidden bg-[#0F111A] rounded-t-[36px] flex flex-col shadow-[0_-20px_60px_rgba(0,0,0,0.9)] transition-transform duration-500 ease-sheet-spring border-t border-white/10 ${
                 isOpen ? 'translate-y-0' : 'translate-y-[100%] pointer-events-none'
             }`}
         >
@@ -137,11 +138,11 @@ const ResistanceMapSheet: React.FC<Props> = ({ isOpen, onClose, onSelectAlternat
             </div>
 
             {/* Body - Optimized Scroll */}
-            <div className="flex-1 overflow-y-auto overflow-x-hidden p-6 relative smooth-scroll">
+            <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain p-6 relative smooth-scroll" style={{ touchAction: 'pan-y' }}>
                 
                 {/* --- INPUT VIEW --- */}
                 {(status === 'initial' || status === 'error') && (
-                    <div className="flex flex-col min-h-full animate-fade-in pb-24">
+                    <div className="flex flex-col min-h-full animate-fade-in pb-36">
                         
                         {/* Prompt Card */}
                         <div className="bg-gradient-to-br from-indigo-900/20 to-purple-900/20 border border-indigo-500/20 rounded-2xl p-5 mb-6">
@@ -313,7 +314,7 @@ const ResistanceMapSheet: React.FC<Props> = ({ isOpen, onClose, onSelectAlternat
 
             {/* --- BOTTOM ACTION BAR (Sticky for Input) --- */}
             {(status === 'initial' || status === 'error') && (
-                <div className="p-6 pt-4 bg-[#0F111A]/95 backdrop-blur-xl border-t border-white/5 absolute bottom-0 inset-x-0 z-20">
+                <div className="p-6 pt-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] bg-[#0F111A]/95 backdrop-blur-xl border-t border-white/5 absolute bottom-0 inset-x-0 z-20">
                     <button 
                         onClick={handleAnalyze}
                         disabled={!inputText.trim()}
@@ -326,6 +327,8 @@ const ResistanceMapSheet: React.FC<Props> = ({ isOpen, onClose, onSelectAlternat
         </div>
     </>
   );
+
+  return typeof document === 'undefined' ? sheet : createPortal(sheet, document.body);
 };
 
 export default ResistanceMapSheet;
