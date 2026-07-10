@@ -1506,6 +1506,30 @@ export default function App() {
         )
         : null;
 
+    const userCenterOverlay = activeTab === 'user_center' && authStatus === 'authenticated' && userProfile && currentUser
+        ? createPortal(
+            <div style={{ pointerEvents: 'auto' }}>
+                <UserCenter
+                    isOpen={true}
+                    onClose={() => setActiveTab('dashboard')}
+                    userProfile={userProfile}
+                    user={currentUser}
+                    identities={identities}
+                    accountSecurity={accountSecurity}
+                    onLogout={handleUserLogout}
+                    onPasswordChanged={handlePasswordChanged}
+                    isPremium={isPremium}
+                    onRequirePayment={() => requireAuth({ type: 'open_payment' })}
+                    insight={insight}
+                    loading={loading}
+                    onAnalyze={() => void handleAnalyze()}
+                    onShowInsight={() => requireAuth({ type: 'open_feature', feature: 'insight' })}
+                />
+            </div>,
+            getPaymentPortalHost()
+        )
+        : null;
+
     const NavItem = ({ icon, label, active, onClick }: { icon: React.ReactNode, label: string, active: boolean, onClick: () => void }) => (
         <button
             onClick={onClick}
@@ -1527,6 +1551,7 @@ export default function App() {
         {membershipIntroOverlay}
         {paymentModalOverlay}
         {authModalOverlay}
+        {userCenterOverlay}
         <div className="h-[100dvh] bg-[#050505] text-slate-200 font-sans selection:bg-amber-500/30 overflow-hidden relative">
 
             {/* iOS Style Ambient Background */}
@@ -1854,25 +1879,6 @@ export default function App() {
 
 
 
-                {activeTab === 'user_center' && authStatus === 'authenticated' && userProfile && currentUser && (
-                    <UserCenter
-                        isOpen={true}
-                        onClose={() => setActiveTab('dashboard')}
-                        userProfile={userProfile}
-                        user={currentUser}
-                        identities={identities}
-                        accountSecurity={accountSecurity}
-                        onLogout={handleUserLogout}
-                        onPasswordChanged={handlePasswordChanged}
-                        isPremium={isPremium}
-                        onRequirePayment={() => requireAuth({ type: 'open_payment' })}
-                        insight={insight}
-                        loading={loading}
-                        onAnalyze={() => void handleAnalyze()}
-                        onShowInsight={() => requireAuth({ type: 'open_feature', feature: 'insight' })}
-                    />
-                )}
-                
                 {activeTab === 'user_center' && !userProfile && (
                     <div className="flex flex-col items-center justify-center min-h-[70vh] sm:min-h-[75vh] px-6 text-center animate-fade-in relative z-10 w-full max-w-lg mx-auto">
                         

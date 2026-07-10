@@ -353,131 +353,145 @@ export const UserCenter: React.FC<UserCenterProps> = ({
       const inviteReady = Boolean(inviteStatus?.inviteUrl);
 
       return (
-          <div className="fixed inset-0 z-[120] flex items-center justify-center p-6">
+          <div className="fixed inset-0 z-[120] flex items-center justify-center overflow-hidden overscroll-contain p-4 sm:p-6">
               <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setShowShareModal(false)} />
-              <div className="relative w-full max-w-sm bg-[#0A0A0C] border border-white/10 rounded-2xl p-8 shadow-2xl animate-scale-in">
-                  <button
-                    type="button"
-                    onClick={() => setShowShareModal(false)}
-                    className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
-                  >
-                      <X size={20} strokeWidth={1.5} />
-                  </button>
-
-                  <div className="text-center mb-8">
-                      <div className="w-14 h-14 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-6">
-                          <Share2 size={24} className="text-white/80" strokeWidth={1.5} />
-                      </div>
-                      <h3 className="text-lg font-medium text-white mb-2 tracking-widest">
-                          {inviteDiscountAvailable ? '邀请优惠已解锁' : '邀请好友解锁专享价'}
-                      </h3>
-                      <p className="text-sm text-white/50 leading-relaxed">
-                          {inviteDiscountAvailable
-                            ? '你已完成邀请任务，可使用 ¥8.80 专享价开通终身会员'
-                            : `邀请 ${requiredInviteCount} 位新用户完成注册，即可解锁 ¥8.80 终身会员专享价`}
-                      </p>
+              <div className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-sm flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0A0A0C] shadow-2xl animate-scale-in">
+                  <div className="flex shrink-0 items-center justify-between border-b border-white/10 px-5 py-4">
+                      <button
+                        type="button"
+                        onClick={() => setShowShareModal(false)}
+                        className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 text-xs text-white/80 hover:bg-white/10 transition-colors"
+                      >
+                          <ChevronLeft size={16} strokeWidth={1.5} />
+                          返回
+                      </button>
+                      <span className="text-xs font-bold tracking-widest text-white/70">邀请好友</span>
+                      <button
+                        type="button"
+                        onClick={() => setShowShareModal(false)}
+                        className="rounded-xl p-2 text-white/50 hover:bg-white/5 hover:text-white transition-colors"
+                        aria-label="关闭邀请弹窗"
+                      >
+                          <X size={18} strokeWidth={1.5} />
+                      </button>
                   </div>
 
-                  <div className="flex justify-center gap-6 mb-8">
-                      {inviteProgressSlots.map((slot) => {
-                        const completed = slot <= displayedInviteCount;
-                        return (
-                          <div
-                            key={slot}
-                            className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all duration-500 ${
-                              completed
-                                ? 'border-amber-500/50 bg-amber-500/10 text-amber-500'
-                                : 'border-white/10 bg-transparent text-white/20'
-                            }`}
-                          >
-                              {completed
-                                ? <Check size={16} strokeWidth={2} />
-                                : <span className="text-sm font-mono">{slot}</span>}
+                  <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:p-8 ios-fluid-scroll [-webkit-overflow-scrolling:touch]" style={{ touchAction: 'pan-y' }}>
+                      <div className="text-center mb-8">
+                          <div className="w-14 h-14 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-6">
+                              <Share2 size={24} className="text-white/80" strokeWidth={1.5} />
                           </div>
-                        );
-                      })}
-                  </div>
+                          <h3 className="text-lg font-medium text-white mb-2 tracking-widest">
+                              {inviteDiscountAvailable ? '邀请优惠已解锁' : '邀请好友解锁专享价'}
+                          </h3>
+                          <p className="text-sm text-white/50 leading-relaxed">
+                              {inviteDiscountAvailable
+                                ? '你已完成邀请任务，可使用 ¥8.80 专享价开通终身会员'
+                                : `邀请 ${requiredInviteCount} 位新用户完成注册，即可解锁 ¥8.80 终身会员专享价`}
+                          </p>
+                      </div>
 
-                  <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-                      <p className="text-[10px] uppercase tracking-[0.18em] text-white/35">
-                          我的邀请码
+                      <div className="flex justify-center gap-6 mb-8">
+                          {inviteProgressSlots.map((slot) => {
+                            const completed = slot <= displayedInviteCount;
+                            return (
+                              <div
+                                key={slot}
+                                className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all duration-500 ${
+                                  completed
+                                    ? 'border-amber-500/50 bg-amber-500/10 text-amber-500'
+                                    : 'border-white/10 bg-transparent text-white/20'
+                                }`}
+                              >
+                                  {completed
+                                    ? <Check size={16} strokeWidth={2} />
+                                    : <span className="text-sm font-mono">{slot}</span>}
+                              </div>
+                            );
+                          })}
+                      </div>
+
+                      <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                          <p className="text-[10px] uppercase tracking-[0.18em] text-white/35">
+                              我的邀请码
+                          </p>
+                          <p className="mt-1 truncate font-mono text-sm text-white/85">
+                              {inviteStatusLoading
+                                ? '正在生成…'
+                                : inviteStatus?.inviteCode || '暂时无法获取'}
+                          </p>
+                      </div>
+
+                      <div className="mb-5 max-h-48 overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-black/30 p-4 ios-fluid-scroll [-webkit-overflow-scrolling:touch]" style={{ touchAction: 'pan-y' }}>
+                          <p className="whitespace-pre-wrap text-sm leading-6 text-white/70">
+                              {inviteShareText || '正在生成邀请文案…'}
+                          </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={!inviteReady || inviteStatusLoading}
+                        onClick={() => void copyInviteMessage()}
+                        className="w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-indigo-500/30 bg-indigo-500/10 text-white font-medium hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                          {inviteCopyState === 'message'
+                            ? <Check size={16} />
+                            : <Copy size={16} />}
+                          <span className="text-sm tracking-wide">
+                              {inviteStatusLoading
+                                ? '正在生成邀请文案…'
+                                : inviteCopyState === 'message'
+                                  ? '完整邀请文案已复制'
+                                  : '复制完整邀请文案'}
+                          </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={
+                          !inviteReady ||
+                          !inviteQrDataUrl ||
+                          posterExportState === 'generating'
+                        }
+                        onClick={() => void exportInvitePoster()}
+                        className="mt-3 w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/30 bg-amber-500/10 text-amber-100 font-medium hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                          {posterExportState === 'done'
+                            ? <Check size={16} />
+                            : <Download size={16} />}
+                          <span className="text-sm tracking-wide">
+                              {!inviteQrDataUrl
+                                ? '正在生成邀请二维码…'
+                                : posterExportState === 'generating'
+                                  ? '正在生成邀请海报…'
+                                  : posterExportState === 'done'
+                                    ? '邀请海报已保存'
+                                    : posterExportState === 'error'
+                                      ? '生成失败，请重试'
+                                      : '保存邀请海报'}
+                          </span>
+                      </button>
+
+                      {inviteDiscountAvailable && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowShareModal(false);
+                            onRequirePayment();
+                          }}
+                          className="mt-3 w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/40 bg-amber-500/15 text-amber-200 font-bold hover:bg-amber-500/25 transition-colors"
+                        >
+                            <Sparkles size={16} />
+                            <span className="text-sm tracking-wide">
+                                ¥8.80 开通终身会员
+                            </span>
+                        </button>
+                      )}
+
+                      <p className="mt-4 text-center text-[10px] leading-relaxed text-white/30">
+                          仅新用户通过你的邀请链接完成注册后计入进度。
                       </p>
-                      <p className="mt-1 truncate font-mono text-sm text-white/85">
-                          {inviteStatusLoading
-                            ? '正在生成…'
-                            : inviteStatus?.inviteCode || '暂时无法获取'}
-                      </p>
                   </div>
-
-                  <div className="mb-5 max-h-48 overflow-y-auto rounded-xl border border-white/10 bg-black/30 p-4">
-                      <p className="whitespace-pre-wrap text-sm leading-6 text-white/70">
-                          {inviteShareText || '正在生成邀请文案…'}
-                      </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={!inviteReady || inviteStatusLoading}
-                    onClick={() => void copyInviteMessage()}
-                    className="w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-indigo-500/30 bg-indigo-500/10 text-white font-medium hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                      {inviteCopyState === 'message'
-                        ? <Check size={16} />
-                        : <Copy size={16} />}
-                      <span className="text-sm tracking-wide">
-                          {inviteStatusLoading
-                            ? '正在生成邀请文案…'
-                            : inviteCopyState === 'message'
-                              ? '完整邀请文案已复制'
-                              : '复制完整邀请文案'}
-                      </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={
-                      !inviteReady ||
-                      !inviteQrDataUrl ||
-                      posterExportState === 'generating'
-                    }
-                    onClick={() => void exportInvitePoster()}
-                    className="mt-3 w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/30 bg-amber-500/10 text-amber-100 font-medium hover:bg-amber-500/20 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                      {posterExportState === 'done'
-                        ? <Check size={16} />
-                        : <Download size={16} />}
-                      <span className="text-sm tracking-wide">
-                          {!inviteQrDataUrl
-                            ? '正在生成邀请二维码…'
-                            : posterExportState === 'generating'
-                              ? '正在生成邀请海报…'
-                              : posterExportState === 'done'
-                                ? '邀请海报已保存'
-                                : posterExportState === 'error'
-                                  ? '生成失败，请重试'
-                                  : '保存邀请海报'}
-                      </span>
-                  </button>
-
-                  {inviteDiscountAvailable && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowShareModal(false);
-                        onRequirePayment();
-                      }}
-                      className="mt-3 w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/40 bg-amber-500/15 text-amber-200 font-bold hover:bg-amber-500/25 transition-colors"
-                    >
-                        <Sparkles size={16} />
-                        <span className="text-sm tracking-wide">
-                            ¥8.80 开通终身会员
-                        </span>
-                    </button>
-                  )}
-
-                  <p className="mt-4 text-center text-[10px] leading-relaxed text-white/30">
-                      仅新用户通过你的邀请链接完成注册后计入进度。
-                  </p>
               </div>
 
           </div>
