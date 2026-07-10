@@ -101,12 +101,14 @@ export interface PhoneRegisterPayload {
   phone: string;
   code: string;
   password: string;
+  inviteCode?: string;
 }
 
 export interface SmsAuthPayload {
   challengeId: string;
   phone: string;
   code: string;
+  inviteCode?: string;
 }
 
 export interface PasswordChangePayload {
@@ -139,6 +141,19 @@ export interface AppleReceiptPayload {
   transactionId?: string;
   environment?: "auto" | "sandbox" | "production";
   mockSuccess?: boolean;
+}
+
+export interface InviteStatusResult {
+  ok?: boolean;
+  inviteCode?: string | null;
+  inviteUrl?: string | null;
+  qualifiedCount: number;
+  requiredCount: number;
+  discountUnlocked: boolean;
+  canCreateDiscountOrder?: boolean;
+  discountProductId: string;
+  discountAmountCents: number;
+  eligibilityStatus?: string;
 }
 
 export interface CreateXunhuPaymentPayload {
@@ -257,6 +272,7 @@ export const backendClient = {
           challengeId: payload.challengeId,
           phone: payload.phone,
           code: payload.code,
+          inviteCode: payload.inviteCode,
         }),
       })
     ),
@@ -270,6 +286,7 @@ export const backendClient = {
           phone: payload.phone,
           code: payload.code,
           password: payload.password,
+          inviteCode: payload.inviteCode,
         }),
       })
     ),
@@ -369,6 +386,9 @@ export const backendClient = {
         mockSuccess: payload.mockSuccess === true,
       }),
     }),
+
+  getInviteStatus: async () =>
+    apiJson<InviteStatusResult>("/api/invites/me"),
 
   createXunhuPayment: async (payload: CreateXunhuPaymentPayload) =>
     apiJson<XunhuPaymentCreateResult>("/api/payment/xunhupay/create", {

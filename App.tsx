@@ -53,6 +53,57 @@ import { i18n, LANGUAGES, LangCode } from './services/i18n';
 const getAppleIapProductId = (_planType?: PaymentSuccessDetails['planType']) =>
     import.meta.env.VITE_APPLE_IAP_LIFETIME_PRODUCT_ID || 'com.lifekline.lifetime';
 
+const PENDING_INVITE_CODE_KEY = 'life_kline_pending_invite_code';
+
+const normalizePendingInviteCode = (value: string | null | undefined) => {
+    const normalized = String(value || '')
+        .trim()
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 32);
+
+    return normalized || undefined;
+};
+
+const savePendingInviteCodeFromUrl = () => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        const inviteCode = normalizePendingInviteCode(
+            new URLSearchParams(window.location.search).get('invite')
+        );
+
+        if (inviteCode) {
+            window.sessionStorage.setItem(PENDING_INVITE_CODE_KEY, inviteCode);
+        }
+    } catch (error) {
+        console.warn('Unable to save pending invite code', error);
+    }
+};
+
+const getPendingInviteCode = () => {
+    if (typeof window === 'undefined') return undefined;
+
+    try {
+        return normalizePendingInviteCode(
+            window.sessionStorage.getItem(PENDING_INVITE_CODE_KEY)
+        );
+    } catch (error) {
+        console.warn('Unable to read pending invite code', error);
+        return undefined;
+    }
+};
+
+const clearPendingInviteCode = () => {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.sessionStorage.removeItem(PENDING_INVITE_CODE_KEY);
+    } catch (error) {
+        console.warn('Unable to clear pending invite code', error);
+    }
+};
+
 const LIFE_BOOK_CACHE_KEYS = ['life_book_data_v2', 'life_book_data'] as const;
 const getScopedLifeBookCacheKeys = (userId?: string | null) =>
     userId ? LIFE_BOOK_CACHE_KEYS.map((key) => `${key}_${userId}`) : [];
@@ -386,6 +437,9 @@ const RootLifeBookOverlay: React.FC<RootLifeBookOverlayProps> = ({ data, isPremi
 };
 
 export default function App() {
+    useEffect(() => {
+        savePendingInviteCodeFromUrl();
+    }, []);
     // --- LANGUAGE STATE ---
     const [lang, setLang] = useState<LangCode>('zh_CN');
 
@@ -1148,7 +1202,11 @@ export default function App() {
         backendClient.sendAuthSms(payload);
 
     const handleSmsAuth = async (payload: SmsAuthPayload) => {
-        await backendClient.verifySmsAuth(payload);
+        await backendClient.verifySmsAuth({
+            ...payload,
+            inviteCode: getPendingInviteCode(),
+        });
+        clearPendingInviteCode();
         await finishAuthenticatedLogin();
     };
 

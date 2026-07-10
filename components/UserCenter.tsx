@@ -9,7 +9,7 @@ import {
   Eye, Cpu, TrendingUp
 } from 'lucide-react';
 import { i18n } from '../services/i18n';
-import { backendClient, type AuthIdentity, type BackendUser } from '../services/backendClient';
+import { backendClient, type AuthIdentity, type BackendUser, type InviteStatusResult } from '../services/backendClient';
 import { InsightDock } from './InsightDock';
 import { ModuleHelperTag } from './ModuleHelperTag';
 
@@ -41,7 +41,7 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   const [activeTab, setActiveTab] = useState<TabKey>('membership');
   const [copied, setCopied] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
-  const [shareCount, setShareCount] = useState(0);
+  const [inviteCopyState, setInviteCopyState] = useState<'idle' | 'code' | 'url'>('idle');
   const [showPasswordForm, setShowPasswordForm] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -49,22 +49,69 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   const [showPasswordValues, setShowPasswordValues] = useState(false);
   const [passwordChanging, setPasswordChanging] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [inviteStatus, setInviteStatus] = useState<InviteStatusResult | null>(null);
+  const [inviteStatusLoading, setInviteStatusLoading] = useState(false);
 
   const [settings, setSettings] = useState({ notifications: true, language: '中文 / EN' });
 
   useEffect(() => {
     if (isOpen) {
         if (membershipOnly) setActiveTab('membership');
-        const savedCount = storage.getShareCount();
-        setShareCount(savedCount);
-
         const savedSettings = storage.getSettings();
         setSettings(savedSettings);
 
+        if (!isPremium) {
+          setInviteStatusLoading(true);
+          void backendClient.getInviteStatus()
+            .then((result) => {
+              setInviteStatus(result);
+            })
+            .catch((error) => {
+              console.warn('Unable to load invite discount status in user center', error);
+              setInviteStatus(null);
+            })
+            .finally(() => {
+              setInviteStatusLoading(false);
+            });
+        } else {
+          setInviteStatus(null);
+          setInviteStatusLoading(false);
+        }
     }
-  }, [isOpen, membershipOnly]);
+  }, [isOpen, isPremium, membershipOnly]);
 
   if (!isOpen) return null;
+
+  const inviteDiscountAvailable =
+    inviteStatus?.discountUnlocked === true &&
+    inviteStatus?.canCreateDiscountOrder === true;
+  const membershipAmountCents = inviteDiscountAvailable
+    ? (inviteStatus?.discountAmountCents || 880)
+    : 1880;
+  const membershipPriceText = (membershipAmountCents / 100).toFixed(2);
+  const qualifiedInviteCount = Math.max(0, inviteStatus?.qualifiedCount ?? 0);
+  const requiredInviteCount = Math.max(1, inviteStatus?.requiredCount ?? 3);
+  const displayedInviteCount = Math.min(qualifiedInviteCount, requiredInviteCount);
+  const inviteProgressSlots = Array.from(
+    { length: requiredInviteCount },
+    (_, index) => index + 1
+  );
+
+  const copyInviteValue = async (kind: 'code' | 'url') => {
+    const value = kind === 'code'
+      ? inviteStatus?.inviteCode
+      : inviteStatus?.inviteUrl;
+
+    if (!value) return;
+
+    try {
+      await navigator.clipboard.writeText(value);
+      setInviteCopyState(kind);
+      window.setTimeout(() => setInviteCopyState('idle'), 1800);
+    } catch (error) {
+      console.warn('Unable to copy invite value', error);
+    }
+  };
 
   const handleCopyId = () => {
     if (!user?.id) return;
@@ -151,11 +198,18 @@ export const UserCenter: React.FC<UserCenterProps> = ({
   /* --- SUBCOMPONENTS --- */
   const ShareUnlockModal = () => {
       if (!showShareModal) return null;
+
+      const inviteReady = Boolean(inviteStatus?.inviteCode && inviteStatus?.inviteUrl);
+
       return (
           <div className="fixed inset-0 z-[120] flex items-center justify-center p-6">
               <div className="absolute inset-0 bg-black/80 backdrop-blur-md" onClick={() => setShowShareModal(false)} />
               <div className="relative w-full max-w-sm bg-[#0A0A0C] border border-white/10 rounded-2xl p-8 shadow-2xl animate-scale-in">
-                  <button onClick={() => setShowShareModal(false)} className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors">
+                  <button
+                    type="button"
+                    onClick={() => setShowShareModal(false)}
+                    className="absolute top-4 right-4 text-white/40 hover:text-white transition-colors"
+                  >
                       <X size={20} strokeWidth={1.5} />
                   </button>
 
@@ -163,28 +217,90 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                       <div className="w-14 h-14 rounded-full bg-white/5 flex items-center justify-center mx-auto mb-6">
                           <Share2 size={24} className="text-white/80" strokeWidth={1.5} />
                       </div>
-                      <h3 className="text-lg font-medium text-white mb-2 tracking-widest">助力解锁</h3>
+                      <h3 className="text-lg font-medium text-white mb-2 tracking-widest">
+                          {inviteDiscountAvailable ? '邀请优惠已解锁' : '邀请好友解锁专享价'}
+                      </h3>
                       <p className="text-sm text-white/50 leading-relaxed">
-                          邀请 3 位好友注册后<br/>解锁体验权益
+                          {inviteDiscountAvailable
+                            ? '你已完成邀请任务，可使用 ¥8.80 专享价开通终身会员'
+                            : `邀请 ${requiredInviteCount} 位新用户完成注册，即可解锁 ¥8.80 终身会员专享价`}
                       </p>
                   </div>
 
-                  <div className="flex justify-center gap-6 mb-10">
-                      {[1, 2, 3].map(i => (
-                          <div key={i} className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all duration-500 ${i <= shareCount ? 'border-amber-500/50 bg-amber-500/10 text-amber-500' : 'border-white/10 bg-transparent text-white/20'}`}>
-                              {i <= shareCount ? <Check size={16} strokeWidth={2} /> : <span className="text-sm font-mono">{i}</span>}
+                  <div className="flex justify-center gap-6 mb-8">
+                      {inviteProgressSlots.map((slot) => {
+                        const completed = slot <= displayedInviteCount;
+                        return (
+                          <div
+                            key={slot}
+                            className={`w-10 h-10 rounded-full flex items-center justify-center border transition-all duration-500 ${
+                              completed
+                                ? 'border-amber-500/50 bg-amber-500/10 text-amber-500'
+                                : 'border-white/10 bg-transparent text-white/20'
+                            }`}
+                          >
+                              {completed
+                                ? <Check size={16} strokeWidth={2} />
+                                : <span className="text-sm font-mono">{slot}</span>}
                           </div>
-                      ))}
+                        );
+                      })}
                   </div>
 
-                  <button
-                    type="button"
-                    disabled
-                    className="w-full py-3.5 bg-white/10 text-white/35 font-medium rounded-lg flex items-center justify-center gap-2 border border-white/10 cursor-not-allowed"
-                  >
-                      <Sparkles size={16} />
-                      <span className="text-sm tracking-wide">邀请功能即将开放</span>
-                  </button>
+                  <div className="mb-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+                      <div className="flex items-center justify-between gap-4">
+                          <div className="min-w-0">
+                              <p className="text-[10px] uppercase tracking-[0.18em] text-white/35">我的邀请码</p>
+                              <p className="mt-1 truncate font-mono text-sm text-white/85">
+                                  {inviteStatusLoading
+                                    ? '正在生成…'
+                                    : inviteStatus?.inviteCode || '暂时无法获取'}
+                              </p>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={!inviteStatus?.inviteCode}
+                            onClick={() => void copyInviteValue('code')}
+                            className="shrink-0 rounded-lg border border-white/10 px-3 py-2 text-[11px] text-white/65 hover:bg-white/5 disabled:cursor-not-allowed disabled:opacity-35"
+                          >
+                              {inviteCopyState === 'code' ? '已复制' : '复制'}
+                          </button>
+                      </div>
+                  </div>
+
+                  {inviteDiscountAvailable ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowShareModal(false);
+                        onRequirePayment();
+                      }}
+                      className="w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-amber-400/40 bg-amber-500/15 text-amber-200 font-bold hover:bg-amber-500/25 transition-colors"
+                    >
+                        <Sparkles size={16} />
+                        <span className="text-sm tracking-wide">¥8.80 开通终身会员</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!inviteReady || inviteStatusLoading}
+                      onClick={() => void copyInviteValue('url')}
+                      className="w-full py-3.5 rounded-lg flex items-center justify-center gap-2 border border-indigo-500/30 bg-indigo-500/10 text-white font-medium hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                        <Share2 size={16} />
+                        <span className="text-sm tracking-wide">
+                          {inviteStatusLoading
+                            ? '正在获取邀请链接…'
+                            : inviteCopyState === 'url'
+                              ? '邀请链接已复制'
+                              : '复制邀请链接'}
+                        </span>
+                    </button>
+                  )}
+
+                  <p className="mt-4 text-center text-[10px] leading-relaxed text-white/30">
+                      仅新用户通过你的邀请链接完成注册后计入进度。
+                  </p>
               </div>
           </div>
       );
@@ -278,10 +394,12 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                <div className="flex flex-col items-end shrink-0 select-none">
                   <div className="flex items-baseline gap-0.5 text-amber-400 font-sans">
                      <span className="text-[10px] sm:text-xs font-black text-amber-300">¥</span>
-                     <span className="text-xl sm:text-2xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-amber-200 via-yellow-300 to-amber-500 drop-shadow-[0_0_12px_rgba(245,158,11,0.5)]">18.80</span>
+                     <span className="text-xl sm:text-2xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-amber-200 via-yellow-300 to-amber-500 drop-shadow-[0_0_12px_rgba(245,158,11,0.5)]">{membershipPriceText}</span>
                      <span className="text-[8px] sm:text-[9.5px] text-amber-300/70 ml-0.5 font-bold font-serif">/终身</span>
                   </div>
-                  <span className="text-[6.5px] sm:text-[7.5px] text-amber-500/70 font-semibold tracking-widest uppercase bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/15">一次开通</span>
+                  <span className="text-[6.5px] sm:text-[7.5px] text-amber-500/70 font-semibold tracking-widest uppercase bg-amber-500/5 px-2 py-0.5 rounded border border-amber-500/15">
+                     {inviteDiscountAvailable ? '邀请专享' : '一次开通'}
+                  </span>
                </div>
             </div>
 
@@ -319,10 +437,14 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                    <div className="relative bg-[#0d0d11] px-4 py-3 sm:py-3.5 rounded-xl flex items-center justify-between backdrop-blur-xl">
                        <div className="flex flex-col items-start text-left">
                            <span className="text-xs sm:text-xs font-black bg-clip-text text-transparent bg-gradient-to-r from-amber-200 to-amber-400 tracking-wider">
-                               立即开通终身会员 · 开启高维天眼
+                               {inviteDiscountAvailable
+                                 ? `邀请 ${requiredInviteCount} 人专享 · 立即开通终身会员`
+                                 : '立即开通终身会员 · 开启高维天眼'}
                            </span>
                            <span className="text-[9px] text-amber-500/70 mt-0.5 tracking-wide">
-                               ¥18.80 / 终身，一次开通
+                               {inviteStatusLoading
+                                 ? '正在核验邀请优惠资格…'
+                                 : `¥${membershipPriceText} / 终身，一次开通`}
                            </span>
                        </div>
                        <div className="w-8 h-8 rounded-full flex items-center justify-center bg-gradient-to-r from-amber-400 to-amber-600 shadow-[0_0_10px_rgba(245,158,11,0.3)] group-hover:shadow-[0_0_15px_rgba(245,158,11,0.6)] transition-all">
@@ -341,23 +463,36 @@ export const UserCenter: React.FC<UserCenterProps> = ({
                 
                 <h3 className="text-xl font-bold text-white tracking-wide mb-2 flex items-center gap-2">
                    <Users className="text-indigo-400" size={20} />
-                   邀请好友 · 解锁体验版
+                   {inviteDiscountAvailable
+                     ? '邀请任务已完成'
+                     : '邀请好友 · 解锁 ¥8.80 专享价'}
                 </h3>
                 <div className="flex items-end gap-3 mb-6 relative z-10">
-                    <span className="text-xs font-bold tracking-[0.22em] text-indigo-300 uppercase">Coming Soon</span>
+                    <span className="text-xs font-bold tracking-[0.22em] text-indigo-300 uppercase">
+                        {inviteDiscountAvailable ? 'Unlocked' : 'Invite Rewards'}
+                    </span>
                 </div>
                 <p className="text-sm text-white/60 leading-relaxed mb-6 font-light relative z-10">
-                    邀请 3 位好友注册后，解锁体验权益。邀请系统、统计和权益发放即将开放。<br/>
+                    {inviteDiscountAvailable
+                      ? '你已完成邀请任务，终身会员专享价已经解锁。'
+                      : `邀请 ${requiredInviteCount} 位新用户通过你的邀请链接完成注册，即可解锁终身会员专享价。`}
+                    <br/>
                     <span className="block mt-4 text-xs text-white/50 font-mono bg-black/30 p-2 rounded-lg border border-white/5 inline-block">
-                        助力进度: <span className="text-indigo-400 font-bold">{shareCount}/3</span>
+                        邀请进度：
+                        <span className="text-indigo-400 font-bold">
+                          {inviteStatusLoading
+                            ? '核验中'
+                            : `${displayedInviteCount}/${requiredInviteCount}`}
+                        </span>
                     </span>
                 </p>
                 
                 <button 
+                    type="button"
                     onClick={() => setShowShareModal(true)}
                     className="relative z-10 w-full flex items-center justify-center gap-2 px-6 py-4 rounded-xl text-sm font-bold tracking-widest transition-all border border-indigo-500/30 bg-indigo-500/10 text-white hover:bg-indigo-500/20 hover:border-indigo-400 active:scale-95"
                 >
-                    查看邀请规则
+                    {inviteDiscountAvailable ? '查看已解锁权益' : '获取邀请链接'}
                     <ChevronRight size={16} />
                 </button>
             </div>

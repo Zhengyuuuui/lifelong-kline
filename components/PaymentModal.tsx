@@ -3,7 +3,7 @@ import React, { useState, useEffect } from 'react';
 import { X, CheckCircle2, Shield, Lock, Smartphone, Radar, Eye, Bot, Sparkles, CreditCard, Magnet, Wind, BookOpen, Utensils, AlertTriangle, Zap, Apple } from 'lucide-react';
 import { i18n } from '../services/i18n';
 import { iosProductionBridge } from '../services/iosProductionBridge';
-import { backendClient, type PaymentOrderStatusResult, type XunhuPaymentCreateResult } from '../services/backendClient';
+import { backendClient, type InviteStatusResult, type PaymentOrderStatusResult, type XunhuPaymentCreateResult } from '../services/backendClient';
 import { hasJwtAuthToken } from '../services/apiBase';
 
 interface PaymentModalProps {
@@ -35,7 +35,10 @@ export interface PaymentSuccessDetails {
 const defaultPayMethod = (): PayMethod =>
   iosProductionBridge.isNativeRuntime() ? 'apple' : 'xunhupay';
 
-const XUNHU_PRODUCT_ID = 'life_kline_lifetime';
+const STANDARD_PRODUCT_ID = 'life_kline_lifetime';
+const STANDARD_AMOUNT_CENTS = 1880;
+const INVITE_PRODUCT_ID = 'life_kline_lifetime_invite';
+const INVITE_AMOUNT_CENTS = 880;
 const POLL_INTERVAL_MS = 2000;
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_STATUS_ERRORS = 5;
@@ -90,12 +93,25 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const [paymentMessage, setPaymentMessage] = useState('');
   const [isMobilePayment, setIsMobilePayment] = useState(() => isMobilePaymentDevice());
   const [qrImageFailed, setQrImageFailed] = useState(false);
+  const [inviteStatus, setInviteStatus] = useState<InviteStatusResult | null>(null);
+  const [inviteStatusLoading, setInviteStatusLoading] = useState(false);
+  const [inviteStatusError, setInviteStatusError] = useState(false);
   const timersRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   const pollTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollDeadlineRef = React.useRef(0);
   const statusErrorCountRef = React.useRef(0);
   const paymentSessionRef = React.useRef(0);
   const showNativeApplePayment = iosProductionBridge.isNativeRuntime();
+  const inviteDiscountAvailable =
+    inviteStatus?.discountUnlocked === true &&
+    inviteStatus?.canCreateDiscountOrder === true;
+  const selectedProductId = inviteDiscountAvailable
+    ? (inviteStatus?.discountProductId || INVITE_PRODUCT_ID)
+    : STANDARD_PRODUCT_ID;
+  const selectedAmountCents = inviteDiscountAvailable
+    ? (inviteStatus?.discountAmountCents || INVITE_AMOUNT_CENTS)
+    : STANDARD_AMOUNT_CENTS;
+  const selectedPriceText = `¥${(selectedAmountCents / 100).toFixed(2)}`;
 
   const clearPaymentTimers = React.useCallback(() => {
     timersRef.current.forEach(clearTimeout);
@@ -116,7 +132,28 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       setStatusResult(null);
       setPaymentMessage('');
       setQrImageFailed(false);
+      setInviteStatus(null);
+      setInviteStatusError(false);
       statusErrorCountRef.current = 0;
+
+      if (hasJwtAuthToken() && !showNativeApplePayment) {
+        setInviteStatusLoading(true);
+        void backendClient.getInviteStatus()
+          .then((result) => {
+            setInviteStatus(result);
+            setInviteStatusError(false);
+          })
+          .catch((error) => {
+            console.warn('Unable to load invite discount status', error);
+            setInviteStatus(null);
+            setInviteStatusError(true);
+          })
+          .finally(() => {
+            setInviteStatusLoading(false);
+          });
+      } else {
+        setInviteStatusLoading(false);
+      }
     }
     return () => {
       paymentSessionRef.current += 1;
@@ -148,13 +185,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         method: 'xunhupay',
         planType: 'lifetime',
         currency: 'CNY',
-        productId: XUNHU_PRODUCT_ID,
+        productId: selectedProductId,
+        amountCents: selectedAmountCents,
         orderId: order.orderId,
         merchantOrderNo: order.merchantOrderNo,
         paymentStatus: result.paymentStatus,
       });
     }, 1000));
-  }, [clearPaymentTimers, onSuccess, payMethod]);
+  }, [clearPaymentTimers, onSuccess, selectedAmountCents, selectedProductId]);
 
   const pollPaymentStatus = React.useCallback(async (order: XunhuPaymentCreateResult) => {
     if (!order.orderId || pollTimerRef.current === null) return;
@@ -232,6 +270,16 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const handlePay = async () => {
     if (step !== 'method') return;
+
+    if (!showNativeApplePayment && inviteStatusLoading) {
+      setPaymentMessage('正在核验邀请优惠资格，请稍候。');
+      return;
+    }
+
+    if (!showNativeApplePayment && inviteStatusError) {
+      setPaymentMessage('邀请优惠资格读取失败，请关闭支付窗口后重试。');
+      return;
+    }
     if (showNativeApplePayment && payMethod === 'apple') {
       setStep('processing');
       void onSuccess({
@@ -257,7 +305,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
     try {
       const order = await backendClient.createXunhuPayment({
-        productId: XUNHU_PRODUCT_ID,
+        productId: selectedProductId,
       });
       if (paymentSession !== paymentSessionRef.current) return;
       setPaymentOrder(order);
@@ -527,9 +575,14 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                                     </p>
                                     
                                     <div className="flex items-baseline justify-center gap-1.5 mb-1">
-                                        <span className="text-[40px] font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-amber-200 tracking-tight leading-none">¥18.80</span>
+                                        <span className="text-[40px] font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-amber-200 tracking-tight leading-none">{selectedPriceText}</span>
                                     </div>
-                                    <p className="text-[11px] text-amber-500 font-bold tracking-widest mb-2">终身会员</p>
+                                    <p className="text-[11px] text-amber-500 font-bold tracking-widest mb-2">
+                                        {inviteDiscountAvailable ? '邀请 3 人专享 · 终身会员' : '终身会员'}
+                                    </p>
+                                    {inviteStatusLoading && (
+                                      <p className="mb-2 text-[10px] text-slate-500">正在核验邀请优惠资格…</p>
+                                    )}
                                     
                                     <span className="text-[10px] text-slate-500 line-through decoration-slate-600 mb-6 block">原价 ¥1,998 的私密私域改运卷</span>
                                     
@@ -607,9 +660,11 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
                             <div className="bg-gradient-to-b from-[#110A05] to-[#0A0505] rounded-[22px] px-5 py-5 text-center relative overflow-hidden">
                                 <h3 className="text-[14px] font-black text-white mb-2">终极天机 · 逆天改命无量权限</h3>
                                 <div className="flex items-baseline justify-center gap-1.5 mb-1">
-                                    <span className="text-[34px] font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-amber-200 tracking-tight leading-none">¥18.80</span>
+                                    <span className="text-[34px] font-black text-transparent bg-clip-text bg-gradient-to-b from-white to-amber-200 tracking-tight leading-none">{selectedPriceText}</span>
                                 </div>
-                                <p className="text-[10px] text-amber-500 font-bold tracking-widest">终身解锁</p>
+                                <p className="text-[10px] text-amber-500 font-bold tracking-widest">
+                                  {inviteDiscountAvailable ? '邀请专享 · 终身解锁' : '终身解锁'}
+                                </p>
                             </div>
                         </div>
                     </div>
