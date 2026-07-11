@@ -101,6 +101,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
   const pollDeadlineRef = React.useRef(0);
   const statusErrorCountRef = React.useRef(0);
   const paymentSessionRef = React.useRef(0);
+  const methodConfirmReadyAtRef = React.useRef(0);
   const showNativeApplePayment = iosProductionBridge.isNativeRuntime();
   const inviteDiscountAvailable =
     inviteStatus?.discountUnlocked === true;
@@ -133,6 +134,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
       setQrImageFailed(false);
       setInviteStatus(null);
       setInviteStatusError(false);
+      methodConfirmReadyAtRef.current = 0;
       statusErrorCountRef.current = 0;
 
       if (hasJwtAuthToken() && !showNativeApplePayment) {
@@ -171,8 +173,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const handleClose = () => {
     paymentSessionRef.current += 1;
+    methodConfirmReadyAtRef.current = 0;
     clearPaymentTimers();
     onClose();
+  };
+
+  const handleEnterPaymentMethod = () => {
+    setPaymentMessage('');
+    methodConfirmReadyAtRef.current = Date.now() + 600;
+    setStep('method');
   };
 
   const completeXunhuPayment = React.useCallback(async (order: XunhuPaymentCreateResult, result: PaymentOrderStatusResult) => {
@@ -269,6 +278,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
   const handlePay = async () => {
     if (step !== 'method') return;
+    if (Date.now() < methodConfirmReadyAtRef.current) return;
 
     if (!showNativeApplePayment && inviteStatusLoading) {
       setPaymentMessage('正在核验邀请优惠资格，请稍候。');
@@ -358,12 +368,12 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             : '支付请求失败';
 
   return (
-    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-y-auto p-4 font-sans text-white pointer-events-auto">
+    <div className="fixed inset-0 z-[2147483647] flex items-center justify-center overflow-hidden overscroll-contain p-4 font-sans text-white pointer-events-auto">
       {/* Darkened Backdrop with Blur */}
       <div className="absolute inset-0 bg-[#000000]/95 backdrop-blur-xl transition-opacity duration-300" onClick={handleClose} />
 
       {/* Main Card */}
-      <div className="relative my-auto min-h-0 w-full max-w-[400px] bg-[#050505] border border-white/10 rounded-[32px] overflow-hidden shadow-[0_0_100px_rgba(255,0,0,0.15)] animate-fade-in-up flex flex-col max-h-[calc(100dvh-2rem)]">
+      <div className="relative my-auto min-h-0 w-full max-w-[400px] bg-[#050505] border border-white/10 rounded-[32px] overflow-hidden overscroll-contain shadow-[0_0_100px_rgba(255,0,0,0.15)] animate-fade-in-up flex flex-col max-h-[calc(100dvh-2rem)]">
         
         {/* --- TOP: URGENCY ALERT (RED) --- */}
         <div className="bg-gradient-to-r from-red-900 via-red-600 to-red-900 px-4 py-2.5 flex flex-col items-center justify-center text-center shadow-[0_0_30px_rgba(220,38,38,0.6)] relative z-20">
@@ -388,7 +398,7 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
         )}
 
         {/* Scrollable Content Area */}
-        <div className="min-h-0 overflow-y-auto overscroll-contain no-scrollbar flex-1 bg-[#050505] [-webkit-overflow-scrolling:touch]">
+        <div className="min-h-0 overflow-y-auto overscroll-contain no-scrollbar flex-1 bg-[#050505] ios-fluid-scroll [-webkit-overflow-scrolling:touch]" style={{ touchAction: 'pan-y' }}>
             {step === 'offer' ? (
                 <div className="pb-36 animate-fade-in">
                     {/* TOP SUMMARY & HOOK */}
@@ -902,9 +912,10 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
 
         {/* BOTTOM FIXED BUTTON (Offer enters path selection; method confirms payment) */}
         {(step === 'offer' || step === 'method') && (
-            <div className="absolute bottom-0 left-0 w-full bg-[#050505]/95 backdrop-blur-xl p-6 pb-8 border-t border-white/10 z-20">
+            <div className="absolute bottom-0 left-0 w-full bg-[#050505]/95 backdrop-blur-xl p-6 pb-[calc(2rem+env(safe-area-inset-bottom))] border-t border-white/10 z-20">
                 <button 
-                  onClick={step === 'offer' ? () => setStep('method') : handlePay}
+                  type="button"
+                  onClick={step === 'offer' ? handleEnterPaymentMethod : handlePay}
                   className="w-full py-4 font-black text-sm uppercase tracking-[0.15em] rounded-xl shadow-2xl hover:scale-[1.02] active:scale-95 select-none transition-all duration-200 ease-out flex items-center justify-center gap-3 group relative overflow-hidden bg-gradient-to-r from-red-600 to-amber-600 text-white shadow-[0_0_40px_rgba(220,38,38,0.4)]"
                 >
                    <span className="relative z-10 flex items-center gap-2">
