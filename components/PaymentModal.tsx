@@ -276,9 +276,9 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
     }, 0);
   }, [clearPaymentTimers, pollPaymentStatus]);
 
-  const handlePay = async () => {
-    if (step !== 'method') return;
-    if (Date.now() < methodConfirmReadyAtRef.current) return;
+  const handlePay = async (allowOfferStep = false) => {
+    if (step !== 'method' && !(allowOfferStep && step === 'offer')) return;
+    if (step === 'method' && Date.now() < methodConfirmReadyAtRef.current) return;
 
     if (!showNativeApplePayment && inviteStatusLoading) {
       setPaymentMessage('正在核验邀请优惠资格，请稍候。');
@@ -910,12 +910,15 @@ export const PaymentModal: React.FC<PaymentModalProps> = ({
             )}
         </div>
 
-        {/* BOTTOM FIXED BUTTON (Offer enters path selection; method confirms payment) */}
+        {/* BOTTOM FIXED BUTTON (Web offer creates order directly; native method confirms payment) */}
         {(step === 'offer' || step === 'method') && (
             <div className="absolute bottom-0 left-0 w-full bg-[#050505]/95 backdrop-blur-xl p-6 pb-[calc(2rem+env(safe-area-inset-bottom))] border-t border-white/10 z-20">
                 <button 
                   type="button"
-                  onClick={step === 'offer' ? handleEnterPaymentMethod : handlePay}
+                  onClick={step === 'offer'
+                    ? (showNativeApplePayment ? handleEnterPaymentMethod : () => void handlePay(true))
+                    : () => void handlePay()
+                  }
                   className="w-full py-4 font-black text-sm uppercase tracking-[0.15em] rounded-xl shadow-2xl hover:scale-[1.02] active:scale-95 select-none transition-all duration-200 ease-out flex items-center justify-center gap-3 group relative overflow-hidden bg-gradient-to-r from-red-600 to-amber-600 text-white shadow-[0_0_40px_rgba(220,38,38,0.4)]"
                 >
                    <span className="relative z-10 flex items-center gap-2">
